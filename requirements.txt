@@ -1,2 +1,4 @@
 coppeliasim-zmqremoteapi-client
 keyboard
+opencv-python
+numpy
