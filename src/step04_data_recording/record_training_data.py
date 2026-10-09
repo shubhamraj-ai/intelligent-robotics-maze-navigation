@@ -9,6 +9,7 @@ from pathlib import Path
 FORWARD_SPEED = 2.0
 TURN_SPEED = 2.0
 SAVE_INTERVAL_SECONDS = 0.10
+LOOP_INTERVAL_SECONDS = 0.10
 DATASET_PATH = Path(__file__).resolve().parents[2] / "dataset"
 CAMERA_PATH = "/PioneerP3DX/cam1"
 
@@ -76,6 +77,7 @@ def main():
             (DATASET_PATH / label).mkdir(parents=True, exist_ok=True)
 
         while True:
+            loop_started = time.monotonic()
             if sim.getSimulationState() in (sim.simulation_stopped, sim.simulation_paused):
                 raise RuntimeError("Simulation is stopped or paused; start it in CoppeliaSim.")
 
@@ -107,6 +109,10 @@ def main():
                         raise RuntimeError(f"Could not save image {image_path}")
                     counters[label] += 1
                     last_save_time = now
+
+            remaining = LOOP_INTERVAL_SECONDS - (time.monotonic() - loop_started)
+            if remaining > 0:
+                time.sleep(remaining)
     except KeyboardInterrupt:
         pass
     except Exception as error:

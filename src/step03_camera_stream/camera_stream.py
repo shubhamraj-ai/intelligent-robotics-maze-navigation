@@ -1,9 +1,11 @@
 """Display the PioneerP3DX camera in OpenCV; stop with terminal Ctrl+C."""
 
 import sys
+import time
 
 
 CAMERA_PATH = "/PioneerP3DX/cam1"
+LOOP_INTERVAL_SECONDS = 0.10
 
 
 def main():
@@ -29,6 +31,7 @@ def main():
 
         resolution_printed = False
         while True:
+            loop_started = time.monotonic()
             if sim.getSimulationState() in (sim.simulation_stopped, sim.simulation_paused):
                 raise RuntimeError("Simulation is stopped or paused; start it in CoppeliaSim.")
 
@@ -53,6 +56,10 @@ def main():
                 resolution_printed = True
             cv2.imshow("PioneerP3DX Camera Feed", frame)
             cv2.waitKey(1)
+
+            remaining = LOOP_INTERVAL_SECONDS - (time.monotonic() - loop_started)
+            if remaining > 0:
+                time.sleep(remaining)
     except KeyboardInterrupt:
         pass
     except Exception as error:
