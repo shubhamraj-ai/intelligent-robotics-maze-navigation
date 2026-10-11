@@ -27,6 +27,18 @@ class FakeKeyboard:
 
 
 class ShadowInferenceTests(unittest.TestCase):
+    def test_single_instance_guard_rejects_second_process(self):
+        first = shadow.acquire_single_instance_guard(0)
+        port = first.getsockname()[1]
+        try:
+            with self.assertRaises(RuntimeError):
+                shadow.acquire_single_instance_guard(port)
+        finally:
+            first.close()
+
+        replacement = shadow.acquire_single_instance_guard(port)
+        replacement.close()
+
     def test_human_command_mapping(self):
         self.assertEqual(
             shadow.get_human_command(FakeKeyboard({"w"})),

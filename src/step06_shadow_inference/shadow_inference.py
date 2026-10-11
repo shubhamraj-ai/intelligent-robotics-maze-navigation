@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import socket
 import sys
 import time
 from dataclasses import dataclass, field
@@ -22,6 +23,7 @@ MODEL_IMAGE_SIZE = (50, 50)
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MODEL_PATH = REPO_ROOT / "models" / "maze_navigation_model_v2.h5"
 DEFAULT_LOG_ROOT = REPO_ROOT / "shadow_logs"
+INSTANCE_GUARD_PORT = 47654
 
 
 @dataclass
@@ -60,6 +62,22 @@ class ShadowMetrics:
             )
         else:
             self.false_left_streak = 0
+
+
+def acquire_single_instance_guard(port: int = INSTANCE_GUARD_PORT):
+    """Reserve a localhost TCP port so a second shadow validator cannot run concurrently."""
+    guard = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+        guard.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+    try:
+        guard.bind(("127.0.0.1", port))
+    except OSError as error:
+        guard.close()
+        raise RuntimeError(
+            "Another Step 6A shadow validator appears to be running. "
+            "Close the existing Step 6A PowerShell/Python process before starting a new one."
+        ) from error
+    return guard
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -214,6 +232,7 @@ def main(argv: list[str] | None = None) -> int:
 
     sim = None
     cv2 = None
+    instance_guard = None
     left_motor = None
     right_motor = None
     csv_file = None
@@ -226,6 +245,9 @@ def main(argv: list[str] | None = None) -> int:
     summary_path = log_dir / f"shadow_{run_stamp}_summary.txt"
 
     try:
+        instance_guard = acquire_single_instance_guard()
+        print("Single-instance guard: acquired.", flush=True)
+
         if not model_path.is_file() or model_path.stat().st_size == 0:
             raise FileNotFoundError(f"Trained model not found: {model_path}")
 
@@ -449,6 +471,8 @@ def main(argv: list[str] | None = None) -> int:
                     file=sys.stderr,
                 )
                 exit_status = 1
+        if instance_guard is not None:
+            instance_guard.close()
 
         summary = build_summary(metrics)
         try:
