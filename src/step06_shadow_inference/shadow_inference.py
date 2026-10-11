@@ -229,22 +229,31 @@ def main(argv: list[str] | None = None) -> int:
         if not model_path.is_file() or model_path.stat().st_size == 0:
             raise FileNotFoundError(f"Trained model not found: {model_path}")
 
+        print(
+            "Startup 1/4: importing TensorFlow and runtime libraries. "
+            "This can take 15-30 seconds on this laptop; W/A/D is NOT active yet.",
+            flush=True,
+        )
         import cv2
         import keyboard
         import numpy as np
         import tensorflow as tf
         from coppeliasim_zmqremoteapi_client import RemoteAPIClient
 
-        print(f"TensorFlow: {tf.__version__}")
+        print(f"Startup 2/4: TensorFlow {tf.__version__} loaded. Loading CNN model...", flush=True)
         model = tf.keras.models.load_model(str(model_path), compile=False)
         validate_model_contract(model)
-        print(f"Model contract: input={model.input_shape}, output={model.output_shape}")
-        print("Class mapping: forward=0, left=1, right=2")
+        print(f"Model contract: input={model.input_shape}, output={model.output_shape}", flush=True)
+        print("Class mapping: forward=0, left=1, right=2", flush=True)
         # Warm the tiny CNN before human driving so first-use graph setup cannot delay motor updates.
-        model(tf.zeros((1, MODEL_IMAGE_SIZE[0], MODEL_IMAGE_SIZE[1], 3), dtype=tf.float32),
-              training=False).numpy()
-        print("Model inference warm-up: complete")
+        print("Startup 3/4: warming the CNN once before driving...", flush=True)
+        model(
+            tf.zeros((1, MODEL_IMAGE_SIZE[0], MODEL_IMAGE_SIZE[1], 3), dtype=tf.float32),
+            training=False,
+        ).numpy()
+        print("Startup 3/4: model inference warm-up complete.", flush=True)
 
+        print("Startup 4/4: connecting to CoppeliaSim...", flush=True)
         client = RemoteAPIClient()
         sim = client.require("sim")
         handles = {}
@@ -280,6 +289,24 @@ def main(argv: list[str] | None = None) -> int:
             ]
         )
 
+        print(
+            "READY: shadow validator is initialized. Start/resume the CoppeliaSim simulation now. "
+            "W/A/D becomes active only after the program detects SIMULATION RUNNING.",
+            flush=True,
+        )
+        waiting_message_printed = False
+        while sim.getSimulationState() in (sim.simulation_stopped, sim.simulation_paused):
+            if not waiting_message_printed:
+                print("Waiting for CoppeliaSim simulation to run...", flush=True)
+                waiting_message_printed = True
+            time.sleep(0.10)
+
+        print(
+            "SIMULATION RUNNING DETECTED — W/A/D MANUAL CONTROL IS ACTIVE NOW. "
+            "CNN remains shadow-only.",
+            flush=True,
+        )
+
         run_started = time.monotonic()
         last_print = 0.0
         resolution_printed = False
@@ -288,7 +315,11 @@ def main(argv: list[str] | None = None) -> int:
         while True:
             loop_started = time.monotonic()
             if sim.getSimulationState() in (sim.simulation_stopped, sim.simulation_paused):
-                raise RuntimeError("Simulation is stopped or paused; start it in CoppeliaSim.")
+                print(
+                    "Simulation stopped/paused; ending this shadow run and writing the summary.",
+                    flush=True,
+                )
+                break
 
             before_label, left_velocity, right_velocity = get_human_command(keyboard)
             sim.setJointTargetVelocity(left_motor, left_velocity)

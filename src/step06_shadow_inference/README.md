@@ -30,11 +30,15 @@ Place a local copy of `maze_navigation_model_v2.h5` at `models/maze_navigation_m
 
 ## Validation run
 
-1. Open `Maze_working_4_7.ttt` in CoppeliaSim Edu 4.7.0 rev4.
-2. Start the simulation.
-3. Run the shadow program with the Python 3.11 environment.
-4. Manually navigate the same clean route with W/A/D.
-5. At the destination, press **Ctrl+C in the terminal first**, then stop CoppeliaSim.
+1. Open `Maze_working_4_7.ttt` in CoppeliaSim Edu 4.7.0 rev4, but leave the simulation stopped.
+2. Run the shadow program with the Python 3.11 environment.
+3. Wait until PowerShell prints `READY: shadow validator is initialized`.
+4. Start the CoppeliaSim simulation.
+5. Wait until PowerShell prints `SIMULATION RUNNING DETECTED — W/A/D MANUAL CONTROL IS ACTIVE NOW`.
+6. Manually navigate the same clean route with W/A/D.
+7. At the destination, press **Ctrl+C in the terminal first**, then stop CoppeliaSim.
+
+TensorFlow startup is intentionally completed before the simulation is started because initialization can take roughly 15–30 seconds on the current laptop. W/A/D is not expected to move the robot until the final `SIMULATION RUNNING DETECTED` message appears.
 
 On the current laptop the command is:
 
