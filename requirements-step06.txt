@@ -1,0 +1,6 @@
+# Step 6A/6 runtime validated on this laptop with Python 3.11.9.
+coppeliasim-zmqremoteapi-client==2.0.4
+keyboard==0.13.5
+opencv-python==5.0.0.93
+numpy==2.4.6
+tensorflow==2.21.0

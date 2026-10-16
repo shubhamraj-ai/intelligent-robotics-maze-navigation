@@ -219,3 +219,6 @@ __marimo__/
 
 # Manual-navigation training images
 dataset/
+# Local trained models and runtime shadow-validation logs
+models/*.h5
+shadow_logs/
