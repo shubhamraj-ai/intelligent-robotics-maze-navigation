@@ -22,25 +22,59 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MODEL_PATH = REPO_ROOT / "models" / "maze_navigation_model_v3.h5"
 DEFAULT_LOG_ROOT = REPO_ROOT / "autonomous_logs"
 TURN_CONFIRMATION_FRAMES = 2
+MIN_TURN_HOLD_SECONDS = 1.20
 
 
-class TurnConfirmationFilter:
-    """Suppress one-frame left/right flips before they reach the motors."""
+class TurnCommitmentController:
+    """Confirm a turn, then keep that direction through the ambiguous mid-turn view."""
 
-    def __init__(self, confirmation_frames: int = TURN_CONFIRMATION_FRAMES):
+    def __init__(
+        self,
+        confirmation_frames: int = TURN_CONFIRMATION_FRAMES,
+        min_turn_hold_seconds: float = MIN_TURN_HOLD_SECONDS,
+    ):
         if confirmation_frames < 1:
             raise ValueError("confirmation_frames must be >= 1")
+        if min_turn_hold_seconds < 0:
+            raise ValueError("min_turn_hold_seconds must be >= 0")
         self.confirmation_frames = confirmation_frames
+        self.min_turn_hold_seconds = min_turn_hold_seconds
         self.pending_turn: str | None = None
         self.pending_count = 0
+        self.active_turn: str | None = None
+        self.turn_started_at: float | None = None
 
-    def apply(self, predicted_label: str) -> str:
+    def _start_turn(self, label: str, now: float) -> str:
+        self.active_turn = label
+        self.turn_started_at = now
+        self.pending_turn = None
+        self.pending_count = 0
+        return label
+
+    def apply(self, predicted_label: str, now: float) -> str:
+        if predicted_label not in CLASS_NAMES:
+            raise ValueError(f"Unknown prediction label: {predicted_label!r}")
+
+        if self.active_turn is not None:
+            assert self.turn_started_at is not None
+            if now - self.turn_started_at < self.min_turn_hold_seconds:
+                return self.active_turn
+
+            if predicted_label == self.active_turn:
+                return self.active_turn
+
+            # The minimum commitment has completed. Return control to the CNN,
+            # but require confirmation before reversing directly into the
+            # opposite turn.
+            self.active_turn = None
+            self.turn_started_at = None
+            self.pending_turn = None
+            self.pending_count = 0
+
         if predicted_label == "forward":
             self.pending_turn = None
             self.pending_count = 0
             return "forward"
-        if predicted_label not in ("left", "right"):
-            raise ValueError(f"Unknown prediction label: {predicted_label!r}")
 
         if predicted_label == self.pending_turn:
             self.pending_count += 1
@@ -49,8 +83,12 @@ class TurnConfirmationFilter:
             self.pending_count = 1
 
         if self.pending_count >= self.confirmation_frames:
-            return predicted_label
+            return self._start_turn(predicted_label, now)
         return "forward"
+
+    @property
+    def mode(self) -> str:
+        return self.active_turn or "vision"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -170,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
     exit_status = 0
     prediction_counts = {name: 0 for name in CLASS_NAMES}
     applied_counts = {name: 0 for name in CLASS_NAMES}
-    turn_filter = TurnConfirmationFilter()
+    turn_controller = TurnCommitmentController()
     csv_file = None
     run_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -246,6 +284,10 @@ def main(argv: list[str] | None = None) -> int:
                 "left_probability",
                 "right_probability",
                 "confidence",
+                "controller_mode",
+                "robot_x",
+                "robot_y",
+                "robot_yaw",
             ]
         )
 
@@ -310,7 +352,8 @@ def main(argv: list[str] | None = None) -> int:
             confidence = float(probabilities[predicted_index])
             prediction_counts[predicted_label] += 1
 
-            applied_label = turn_filter.apply(predicted_label)
+            elapsed = time.monotonic() - run_started
+            applied_label = turn_controller.apply(predicted_label, elapsed)
             applied_counts[applied_label] += 1
             left_velocity, right_velocity = motor_velocities_for_prediction(
                 applied_label
@@ -318,7 +361,12 @@ def main(argv: list[str] | None = None) -> int:
             sim.setJointTargetVelocity(left_motor, left_velocity)
             sim.setJointTargetVelocity(right_motor, right_velocity)
 
-            elapsed = time.monotonic() - run_started
+            robot_position = sim.getObjectPosition(
+                handles["/PioneerP3DX"], sim.handle_world
+            )
+            robot_yaw = sim.getObjectOrientation(
+                handles["/PioneerP3DX"], sim.handle_world
+            )[2]
             writer.writerow(
                 [
                     datetime.now(timezone.utc).isoformat(),
@@ -329,6 +377,10 @@ def main(argv: list[str] | None = None) -> int:
                     f"{float(probabilities[1]):.6f}",
                     f"{float(probabilities[2]):.6f}",
                     f"{confidence:.6f}",
+                    turn_controller.mode,
+                    f"{float(robot_position[0]):.6f}",
+                    f"{float(robot_position[1]):.6f}",
+                    f"{float(robot_yaw):.6f}",
                 ]
             )
             csv_file.flush()
@@ -362,7 +414,7 @@ def main(argv: list[str] | None = None) -> int:
             if now - last_print >= PRINT_INTERVAL_SECONDS:
                 print(
                     f"cnn={predicted_label:<7} applied={applied_label:<7} "
-                    f"confidence={confidence:.3f} "
+                    f"mode={turn_controller.mode:<6} confidence={confidence:.3f} "
                     f"wheels=({left_velocity:.1f}, {right_velocity:.1f})"
                 )
                 last_print = now

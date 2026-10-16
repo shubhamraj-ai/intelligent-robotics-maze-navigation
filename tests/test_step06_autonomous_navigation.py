@@ -32,19 +32,31 @@ class AutonomousNavigationTests(unittest.TestCase):
             {"forward": 0, "left": 1, "right": 2},
         )
 
-    def test_turn_confirmation_filter_suppresses_single_frame_flips(self):
-        filt = auto.TurnConfirmationFilter(confirmation_frames=2)
-        self.assertEqual(filt.apply("left"), "forward")
-        self.assertEqual(filt.apply("left"), "left")
-        self.assertEqual(filt.apply("right"), "forward")
-        self.assertEqual(filt.apply("right"), "right")
+    def test_turn_commitment_suppresses_single_frame_flip(self):
+        ctl = auto.TurnCommitmentController(
+            confirmation_frames=2, min_turn_hold_seconds=1.2
+        )
+        self.assertEqual(ctl.apply("right", 0.0), "forward")
+        self.assertEqual(ctl.apply("right", 0.1), "right")
+        self.assertEqual(ctl.apply("left", 0.5), "right")
+        self.assertEqual(ctl.apply("forward", 1.0), "right")
 
-    def test_turn_confirmation_filter_resets_on_forward(self):
-        filt = auto.TurnConfirmationFilter(confirmation_frames=2)
-        self.assertEqual(filt.apply("right"), "forward")
-        self.assertEqual(filt.apply("forward"), "forward")
-        self.assertEqual(filt.apply("right"), "forward")
-        self.assertEqual(filt.apply("right"), "right")
+    def test_turn_commitment_releases_after_hold(self):
+        ctl = auto.TurnCommitmentController(
+            confirmation_frames=2, min_turn_hold_seconds=1.2
+        )
+        self.assertEqual(ctl.apply("right", 0.0), "forward")
+        self.assertEqual(ctl.apply("right", 0.1), "right")
+        self.assertEqual(ctl.apply("left", 1.31), "forward")
+        self.assertEqual(ctl.apply("left", 1.41), "left")
+
+    def test_same_turn_can_continue_after_minimum_hold(self):
+        ctl = auto.TurnCommitmentController(
+            confirmation_frames=2, min_turn_hold_seconds=1.2
+        )
+        self.assertEqual(ctl.apply("left", 0.0), "forward")
+        self.assertEqual(ctl.apply("left", 0.1), "left")
+        self.assertEqual(ctl.apply("left", 1.5), "left")
 
     def test_prediction_to_motor_mapping(self):
         self.assertEqual(

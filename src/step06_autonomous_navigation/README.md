@@ -14,7 +14,7 @@ This program is the first autonomous-navigation implementation after the accepte
 - Stops both motors on shutdown or error.
 - Ignores the initial all-zero vision-sensor frame if CoppeliaSim exposes one.
 
-After the first raw closed-loop run exposed rapid left/right oscillation at a right-hand turn, the controller now requires two consecutive matching turn predictions before applying a left or right motor command. A single unconfirmed turn frame falls back to forward. This is a minimal generic stabilizer based on observed closed-loop behavior; it does **not** add confidence thresholds, route hard-coding, ultrasonic logic, or Step-7 mapping logic.
+Closed-loop testing showed that two-frame confirmation alone was not sufficient: at the problematic right-hand turn, the CNN produced sustained alternating left/right runs. A simulator calibration showed that a roughly 90-degree in-place turn at the established wheel speeds takes about 1.64 s, while the observed right predictions were often reversing after only about 0.5?0.7 s. The controller therefore still requires two matching turn predictions, but once a turn begins it commits to that direction for a minimum 1.20 s before allowing a reversal. This hold is deliberately shorter than a full calibrated 90-degree turn so vision remains responsible for finishing the maneuver. It is generic and does **not** encode the maze route, use confidence thresholds, ultrasonic logic, or Step-7 mapping logic.
 
 ## Runtime
 
@@ -68,4 +68,4 @@ Run the full repository test suite with:
 
 ## Local evidence
 
-Each autonomous run writes an ignored CSV under autonomous_logs/ with the raw CNN prediction, the applied command after two-frame turn confirmation, class probabilities, and confidence. These logs are for validation evidence and are not committed.
+Each autonomous run writes an ignored CSV under autonomous_logs/ with the raw CNN prediction, the applied command after confirmation/turn commitment, class probabilities, confidence, controller mode, and robot pose. These logs are for validation evidence and are not committed.
