@@ -50,8 +50,10 @@ class Step05BNotebookTests(unittest.TestCase):
             "No moderated candidate reduced validation forward->left errors",
             self.all_source,
         )
-        self.assertIn("TURN_RECALL_TOLERANCE = 0.10", self.all_source)
+        self.assertIn("MAX_ADDITIONAL_TURN_MISSES = 2", self.all_source)
         self.assertIn("MACRO_F1_TOLERANCE = 0.05", self.all_source)
+        self.assertIn("left_correct_floor", self.all_source)
+        self.assertIn("right_correct_floor", self.all_source)
 
     def test_v2_is_preserved_and_v3_evidence_is_saved(self):
         self.assertIn("maze_navigation_model_v2.h5", self.all_source)
