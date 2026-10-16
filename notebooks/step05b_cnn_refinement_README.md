@@ -25,7 +25,7 @@ The only experimental variable is class-weight strength. Candidate alphas are 1.
 
 ## Leakage guardrail
 
-All candidates are trained and ranked using validation data only. The untouched test set is evaluated once, after selection. If no moderated candidate reduces validation forward-to-left errors without unacceptable turn-performance loss, the notebook intentionally stops before test evaluation.
+All candidates are trained and ranked using validation data only. The untouched test set is evaluated once, after selection. Because the validation split contains only 18 left and 19 right examples, the turn-safety guardrail is expressed as integer errors: a candidate may make at most two additional left mistakes and two additional right mistakes versus the alpha=1.00 baseline, while macro-F1 may fall by no more than 0.05. If no moderated candidate reduces validation forward-to-left errors within those limits, the notebook intentionally stops before test evaluation.
 
 ## Successful-run outputs
 
