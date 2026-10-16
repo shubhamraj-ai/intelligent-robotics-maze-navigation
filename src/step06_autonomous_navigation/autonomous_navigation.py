@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -18,6 +20,37 @@ CAMERA_PATH = "/PioneerP3DX/cam1"
 MODEL_IMAGE_SIZE = (50, 50)
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MODEL_PATH = REPO_ROOT / "models" / "maze_navigation_model_v3.h5"
+DEFAULT_LOG_ROOT = REPO_ROOT / "autonomous_logs"
+TURN_CONFIRMATION_FRAMES = 2
+
+
+class TurnConfirmationFilter:
+    """Suppress one-frame left/right flips before they reach the motors."""
+
+    def __init__(self, confirmation_frames: int = TURN_CONFIRMATION_FRAMES):
+        if confirmation_frames < 1:
+            raise ValueError("confirmation_frames must be >= 1")
+        self.confirmation_frames = confirmation_frames
+        self.pending_turn: str | None = None
+        self.pending_count = 0
+
+    def apply(self, predicted_label: str) -> str:
+        if predicted_label == "forward":
+            self.pending_turn = None
+            self.pending_count = 0
+            return "forward"
+        if predicted_label not in ("left", "right"):
+            raise ValueError(f"Unknown prediction label: {predicted_label!r}")
+
+        if predicted_label == self.pending_turn:
+            self.pending_count += 1
+        else:
+            self.pending_turn = predicted_label
+            self.pending_count = 1
+
+        if self.pending_count >= self.confirmation_frames:
+            return predicted_label
+        return "forward"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -37,6 +70,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--no-display",
         action="store_true",
         help="Disable the OpenCV preview window while keeping console output.",
+    )
+    parser.add_argument(
+        "--log-dir",
+        type=Path,
+        default=DEFAULT_LOG_ROOT,
+        help=f"Directory for local CSV evidence (default: {DEFAULT_LOG_ROOT})",
     )
     return parser.parse_args(argv)
 
@@ -117,6 +156,7 @@ def stop_motors(sim, left_motor, right_motor) -> bool:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     model_path = args.model.resolve()
+    log_dir = args.log_dir.resolve()
 
     print("STEP 6 - CNN Autonomous Navigation")
     print("IMPORTANT: The CNN directly controls the PioneerP3DX motors in this program.")
@@ -129,6 +169,12 @@ def main(argv: list[str] | None = None) -> int:
     right_motor = None
     exit_status = 0
     prediction_counts = {name: 0 for name in CLASS_NAMES}
+    applied_counts = {name: 0 for name in CLASS_NAMES}
+    turn_filter = TurnConfirmationFilter()
+    csv_file = None
+    run_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = log_dir / f"autonomous_{run_stamp}.csv"
 
     try:
         if not model_path.is_file() or model_path.stat().st_size == 0:
@@ -188,6 +234,21 @@ def main(argv: list[str] | None = None) -> int:
 
         stop_motors(sim, left_motor, right_motor)
 
+        csv_file = csv_path.open("w", newline="", encoding="utf-8")
+        writer = csv.writer(csv_file)
+        writer.writerow(
+            [
+                "timestamp_utc",
+                "elapsed_seconds",
+                "raw_prediction",
+                "applied_command",
+                "forward_probability",
+                "left_probability",
+                "right_probability",
+                "confidence",
+            ]
+        )
+
         print(
             "READY: autonomous navigator is initialized. Start/resume the "
             "CoppeliaSim simulation when ready.",
@@ -208,6 +269,7 @@ def main(argv: list[str] | None = None) -> int:
             flush=True,
         )
 
+        run_started = time.monotonic()
         last_print = 0.0
         resolution_printed = False
         blank_frame_noted = False
@@ -248,11 +310,28 @@ def main(argv: list[str] | None = None) -> int:
             confidence = float(probabilities[predicted_index])
             prediction_counts[predicted_label] += 1
 
+            applied_label = turn_filter.apply(predicted_label)
+            applied_counts[applied_label] += 1
             left_velocity, right_velocity = motor_velocities_for_prediction(
-                predicted_label
+                applied_label
             )
             sim.setJointTargetVelocity(left_motor, left_velocity)
             sim.setJointTargetVelocity(right_motor, right_velocity)
+
+            elapsed = time.monotonic() - run_started
+            writer.writerow(
+                [
+                    datetime.now(timezone.utc).isoformat(),
+                    f"{elapsed:.3f}",
+                    predicted_label,
+                    applied_label,
+                    f"{float(probabilities[0]):.6f}",
+                    f"{float(probabilities[1]):.6f}",
+                    f"{float(probabilities[2]):.6f}",
+                    f"{confidence:.6f}",
+                ]
+            )
+            csv_file.flush()
 
             if not args.no_display:
                 frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
@@ -282,7 +361,8 @@ def main(argv: list[str] | None = None) -> int:
             now = time.monotonic()
             if now - last_print >= PRINT_INTERVAL_SECONDS:
                 print(
-                    f"cnn={predicted_label:<7} confidence={confidence:.3f} "
+                    f"cnn={predicted_label:<7} applied={applied_label:<7} "
+                    f"confidence={confidence:.3f} "
                     f"wheels=({left_velocity:.1f}, {right_velocity:.1f})"
                 )
                 last_print = now
@@ -300,6 +380,9 @@ def main(argv: list[str] | None = None) -> int:
         if sim is not None and not stop_motors(sim, left_motor, right_motor):
             exit_status = 1
 
+        if csv_file is not None:
+            csv_file.close()
+
         if cv2 is not None:
             try:
                 cv2.destroyAllWindows()
@@ -313,11 +396,16 @@ def main(argv: list[str] | None = None) -> int:
         total_predictions = sum(prediction_counts.values())
         if total_predictions:
             print(
-                "Prediction counts: "
+                "Raw prediction counts: "
                 + ", ".join(
                     f"{name}={prediction_counts[name]}" for name in CLASS_NAMES
                 )
             )
+            print(
+                "Applied command counts: "
+                + ", ".join(f"{name}={applied_counts[name]}" for name in CLASS_NAMES)
+            )
+            print(f"Autonomous CSV log: {csv_path}")
 
     return exit_status
 

@@ -32,6 +32,20 @@ class AutonomousNavigationTests(unittest.TestCase):
             {"forward": 0, "left": 1, "right": 2},
         )
 
+    def test_turn_confirmation_filter_suppresses_single_frame_flips(self):
+        filt = auto.TurnConfirmationFilter(confirmation_frames=2)
+        self.assertEqual(filt.apply("left"), "forward")
+        self.assertEqual(filt.apply("left"), "left")
+        self.assertEqual(filt.apply("right"), "forward")
+        self.assertEqual(filt.apply("right"), "right")
+
+    def test_turn_confirmation_filter_resets_on_forward(self):
+        filt = auto.TurnConfirmationFilter(confirmation_frames=2)
+        self.assertEqual(filt.apply("right"), "forward")
+        self.assertEqual(filt.apply("forward"), "forward")
+        self.assertEqual(filt.apply("right"), "forward")
+        self.assertEqual(filt.apply("right"), "right")
+
     def test_prediction_to_motor_mapping(self):
         self.assertEqual(
             auto.motor_velocities_for_prediction("forward"),

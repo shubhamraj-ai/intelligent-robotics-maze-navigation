@@ -1,4 +1,4 @@
-# Step 6 — Autonomous CNN navigation
+# Step 6 â€” Autonomous CNN navigation
 
 This program is the first autonomous-navigation implementation after the accepted Step-5B v3 CNN and the successful Step-6A-v3 shadow validation.
 
@@ -7,14 +7,14 @@ This program is the first autonomous-navigation implementation after the accepte
 - Reads the live `/PioneerP3DX/cam1` image from CoppeliaSim.
 - Reproduces the Step-5 preprocessing contract: top-down RGB, 50x50, float32, scaled to `[0, 1]`.
 - Uses the accepted v3 CNN with class order `forward=0, left=1, right=2`.
-- Directly maps each CNN prediction to the established wheel commands:
-  - `forward` → left `2.0`, right `2.0`
-  - `left` → left `-2.0`, right `2.0`
-  - `right` → left `2.0`, right `-2.0`
+- Maps each applied CNN navigation command to the established wheel commands:
+  - `forward` â†’ left `2.0`, right `2.0`
+  - `left` â†’ left `-2.0`, right `2.0`
+  - `right` â†’ left `2.0`, right `-2.0`
 - Stops both motors on shutdown or error.
 - Ignores the initial all-zero vision-sensor frame if CoppeliaSim exposes one.
 
-This first autonomous attempt intentionally uses the raw accepted CNN decision. It does **not** add confidence thresholds, temporal smoothing, route hard-coding, ultrasonic logic, or Step-7 mapping logic.
+After the first raw closed-loop run exposed rapid left/right oscillation at a right-hand turn, the controller now requires two consecutive matching turn predictions before applying a left or right motor command. A single unconfirmed turn frame falls back to forward. This is a minimal generic stabilizer based on observed closed-loop behavior; it does **not** add confidence thresholds, route hard-coding, ultrasonic logic, or Step-7 mapping logic.
 
 ## Runtime
 
@@ -51,7 +51,7 @@ Waiting for CoppeliaSim simulation to run...
 6. Wait for:
 
 ```text
-SIMULATION RUNNING DETECTED — CNN MOTOR CONTROL IS ACTIVE NOW.
+SIMULATION RUNNING DETECTED â€” CNN MOTOR CONTROL IS ACTIVE NOW.
 ```
 
 At that point the CNN controls the robot directly. Do not use W/A/D in this program.
@@ -65,3 +65,7 @@ Run the full repository test suite with:
 ```powershell
 & "F:\Shubham Raj\PythonEnvs\intelligent-robotics-step06-py311\Scripts\python.exe" -m unittest discover -s tests -v
 ```
+
+## Local evidence
+
+Each autonomous run writes an ignored CSV under autonomous_logs/ with the raw CNN prediction, the applied command after two-frame turn confirmation, class probabilities, and confidence. These logs are for validation evidence and are not committed.

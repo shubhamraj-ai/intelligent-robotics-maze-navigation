@@ -222,3 +222,4 @@ dataset/
 # Local trained models and runtime shadow-validation logs
 models/*.h5
 shadow_logs/
+autonomous_logs/
