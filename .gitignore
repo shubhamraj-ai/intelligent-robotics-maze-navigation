@@ -223,3 +223,4 @@ dataset/
 models/*.h5
 shadow_logs/
 recovery_sessions/
+training_packages/
