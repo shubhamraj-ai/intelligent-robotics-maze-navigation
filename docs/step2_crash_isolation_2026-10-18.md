@@ -66,3 +66,17 @@ This materially weakens the simple control-rate hypothesis. The 50 ms cadence al
 Current interpretation: the CoppeliaSim `0xc0000374` failure is intermittent. It is not deterministically tied to the second-turn maze location, persistent ZMQ connectivity, or 50 ms motor-command cadence.
 
 The next isolation layer is vision-sensor acquisition without motor control, OpenCV display, TensorFlow, or CNN inference. If that is stable, the next combined diagnostic should add manual motor control plus camera acquisition while still excluding TensorFlow/CNN inference.
+
+
+## Camera-only acquisition result
+
+A 60-second raw vision-sensor acquisition test passed with the robot stationary:
+- 438 frames acquired
+- stable 50 x 50 RGB resolution
+- simulation remained running
+- CoppeliaSim process remained alive
+- no new CoppeliaSim crash event occurred
+
+This rules out repeated raw camera acquisition by itself as a sufficient trigger.
+
+The next combined isolation test is manual motor control plus raw camera acquisition at 100 ms, with OpenCV display, TensorFlow, and CNN inference still excluded.
