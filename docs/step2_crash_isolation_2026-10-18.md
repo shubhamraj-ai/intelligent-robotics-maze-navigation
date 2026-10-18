@@ -36,3 +36,16 @@ The script intentionally mirrors the original Step-2 motor-control logic and key
 If the 100 ms version is stable through the route where the 50 ms version crashed, repeat evidence before modifying the academic Step-2 controller.
 
 Autonomous Step 6 remains blocked.
+
+
+## 100 ms control-rate result
+
+The explicit `--interval 0.10` Step-2 rate diagnostic remained stable past the previous failure area.
+
+Observed process evidence:
+- at least 2,200 control loops completed
+- approximately 307 seconds of runtime before the diagnostic controller was stopped
+- CoppeliaSim process remained alive
+- no new CoppeliaSim Application Error / Windows Error Reporting crash event occurred during this run
+
+This strengthens, but does not yet prove, the hypothesis that the failure may be control-rate sensitive. The next controlled A/B check is to run the same diagnostic script with `--interval 0.05` from a clean scene reset. If the 50 ms variant reproduces the crash while the 100 ms variant remains stable, the control-call cadence hypothesis becomes substantially stronger. If 50 ms also remains stable, the crash should be treated as intermittent and another variable must be isolated.
