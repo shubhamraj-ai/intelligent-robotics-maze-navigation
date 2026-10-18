@@ -80,3 +80,20 @@ A 60-second raw vision-sensor acquisition test passed with the robot stationary:
 This rules out repeated raw camera acquisition by itself as a sufficient trigger.
 
 The next combined isolation test is manual motor control plus raw camera acquisition at 100 ms, with OpenCV display, TensorFlow, and CNN inference still excluded.
+
+
+## Manual + raw camera result
+
+The combined manual-control + raw-camera diagnostic remained stable past the prior failure area:
+- at least 1,900 loops completed
+- approximately 193 seconds of runtime before cleanup
+- manual forward/left/right motor control active
+- raw 50 x 50 camera acquisition active
+- OpenCV display OFF
+- TensorFlow/CNN inference OFF
+- CoppeliaSim process remained alive
+- no new CoppeliaSim crash event occurred
+
+This shows that motor control plus repeated raw vision-sensor acquisition is also not sufficient to reproduce the intermittent `0xc0000374` crash.
+
+The next high-value isolation test is the actual alpha-0.50 shadow validator with `--no-display`. This adds NumPy frame conversion, TensorFlow preprocessing/inference, model execution, scoring, and CSV logging while keeping the OpenCV GUI path disabled. A fresh scene reset/full traversal is required so the run can also serve as a valid alpha-0.50 live-shadow gate if it completes.
