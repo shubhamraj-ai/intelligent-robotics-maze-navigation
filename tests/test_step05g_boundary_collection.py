@@ -1,6 +1,7 @@
 import importlib.util
 import sys
 import unittest
+from collections import deque
 from pathlib import Path
 
 import numpy as np
@@ -27,11 +28,16 @@ class FakeKeyboard:
         return key in self.pressed
 
 
-def row(frame_index, command, elapsed=None):
+def sample(frame_index, command):
     return {
-        "frame_index": str(frame_index),
+        "frame_index": frame_index,
         "human_command": command,
-        "elapsed_seconds": f"{(elapsed if elapsed is not None else frame_index/10):.3f}",
+        "timestamp_utc": "2026-10-18T00:00:00+00:00",
+        "elapsed_seconds": f"{frame_index/10:.3f}",
+        "robot_x": "0",
+        "robot_y": "0",
+        "robot_yaw": "0",
+        "frame_rgb": np.zeros((2, 2, 3), dtype=np.uint8),
     }
 
 
@@ -71,62 +77,64 @@ class Step05GBoundaryCollectionTests(unittest.TestCase):
         )
         np.testing.assert_array_equal(frame, expected)
 
-    def test_detects_forward_to_right_boundary_across_blank_frames(self):
-        rows = [
-            row(1, "forward"),
-            row(2, "forward"),
-            row(3, "forward"),
-            row(4, "forward"),
-            row(5, "forward"),
-            row(6, ""),
-            row(7, ""),
-            row(8, "right"),
-            row(9, "right"),
-            row(10, "right"),
-            row(11, "right"),
-            row(12, "right"),
-        ]
-        events = collector.detect_boundary_events(rows, boundary_frames=5)
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0]["turn_class"], "right")
-        self.assertEqual(
-            [int(r["frame_index"]) for r in events[0]["pre_rows"]],
-            [1, 2, 3, 4, 5],
+    def test_recent_forward_samples_ignore_blank_frames(self):
+        ring = deque(
+            [
+                sample(1, "left"),
+                sample(2, "forward"),
+                sample(3, None),
+                sample(4, "forward"),
+                sample(5, "forward"),
+                sample(6, None),
+                sample(7, "forward"),
+                sample(8, "forward"),
+            ],
+            maxlen=40,
         )
+        selected = collector.recent_forward_samples(ring, count=5)
         self.assertEqual(
-            [int(r["frame_index"]) for r in events[0]["post_rows"]],
-            [8, 9, 10, 11, 12],
+            [item["frame_index"] for item in selected],
+            [2, 4, 5, 7, 8],
         )
 
-    def test_rejects_incomplete_boundary(self):
-        rows = [
-            row(1, "forward"),
-            row(2, "forward"),
-            row(3, "forward"),
-            row(4, "forward"),
-            row(5, "forward"),
-            row(6, "left"),
-            row(7, "left"),
-        ]
-        events = collector.detect_boundary_events(rows, boundary_frames=5)
-        self.assertEqual(events, [])
+    def test_recent_forward_samples_do_not_cross_prior_turn(self):
+        ring = deque(
+            [
+                sample(1, "forward"),
+                sample(2, "forward"),
+                sample(3, "right"),
+                sample(4, "forward"),
+                sample(5, "forward"),
+                sample(6, "forward"),
+            ],
+            maxlen=40,
+        )
+        self.assertEqual(collector.recent_forward_samples(ring, count=5), [])
 
-    def test_summary_counts_left_and_right_events(self):
+    def test_summary_counts_completed_events_and_saved_images(self):
         rows = [
-            row(1, "forward"),
-            row(2, "left"),
-            row(3, "right"),
-            row(4, ""),
+            {"human_command": "forward"},
+            {"human_command": "left"},
+            {"human_command": "right"},
+            {"human_command": ""},
         ]
         events = [
-            {"turn_class": "left"},
-            {"turn_class": "right"},
-            {"turn_class": "right"},
+            {"turn": "left"},
+            {"turn": "right"},
+            {"turn": "right"},
         ]
-        summary = collector.build_summary("boundary_train_01", "train", rows, events)
-        self.assertIn("Valid left-turn boundary events: 1", summary)
-        self.assertIn("Valid right-turn boundary events: 2", summary)
-        self.assertIn("CNN inference: OFF", summary)
+        summary = collector.build_summary(
+            "boundary_train_01",
+            "train",
+            rows,
+            events,
+            discarded_events=1,
+        )
+        self.assertIn("Completed left-boundary events: 1", summary)
+        self.assertIn("Completed right-boundary events: 2", summary)
+        self.assertIn("Discarded incomplete boundary events: 1", summary)
+        self.assertIn("Saved images: 30", summary)
+        self.assertIn("Continuous JPEG writing: OFF", summary)
 
 
 if __name__ == "__main__":

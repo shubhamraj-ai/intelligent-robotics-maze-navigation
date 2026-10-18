@@ -1,10 +1,11 @@
-"""Collect paired turn-boundary data for Step 5G.
+"""Low-I/O paired turn-boundary collector for Step 5G.
 
-Human W/A/D commands control the PioneerP3DX. No CNN inference is performed.
-Every nonblank camera frame is saved with the stable human command and robot
-pose. After the run, turn-onset events are identified from the human-command
-sequence so matched pre-turn forward frames and post-onset true-turn frames can
-be selected later without changing the labels after seeing model predictions.
+Human W/A/D controls the PioneerP3DX. No CNN inference is performed.
+The collector keeps only a small rolling camera buffer in memory and writes
+images to disk when a complete forward->left/right boundary is observed:
+five stable forward frames before onset and five stable true-turn frames after.
+
+This avoids the continuous JPEG write load used by the first Step 5G attempt.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import argparse
 import csv
 import sys
 import time
+from collections import Counter, deque
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,20 +24,18 @@ TURN_SPEED = 2.0
 LOOP_INTERVAL_SECONDS = 0.10
 CAMERA_PATH = "/PioneerP3DX/cam1"
 BOUNDARY_FRAMES = 5
+RING_SIZE = 40
+METADATA_FLUSH_EVERY = 25
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "boundary_sessions"
 
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        description="Human-controlled paired turn-boundary data collection."
+        description="Low-I/O human-controlled paired turn-boundary collection."
     )
     parser.add_argument("--session-id", required=True)
-    parser.add_argument(
-        "--role",
-        choices=("train", "validation"),
-        required=True,
-    )
+    parser.add_argument("--role", choices=("train", "validation"), required=True)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     return parser.parse_args(argv)
 
@@ -79,148 +79,141 @@ def stop_motors(sim, left_motor, right_motor):
     return ok
 
 
-def detect_boundary_events(rows, boundary_frames=BOUNDARY_FRAMES):
-    """Identify forward->left/right command boundaries from stable labels.
+def recent_forward_samples(ring, count=BOUNDARY_FRAMES):
+    """Return the most recent contiguous stable-forward samples.
 
-    Blank/unstable frames are ignored when determining the previous stable human
-    command. A valid event must have at least boundary_frames stable forward
-    samples immediately before the onset in stable-command order and at least
-    boundary_frames stable samples of the turn command starting at the onset.
+    Blank samples are ignored. Encountering a stable left/right sample stops
+    the backward search so a previous turn cannot leak into a new boundary.
     """
-
-    stable = [
-        (index, row)
-        for index, row in enumerate(rows)
-        if row["human_command"] in CLASS_NAMES
-    ]
-    events = []
-
-    for pos, (row_index, row) in enumerate(stable):
-        turn = row["human_command"]
-        if turn not in ("left", "right") or pos == 0:
+    selected = []
+    for sample in reversed(ring):
+        command = sample["human_command"]
+        if command is None:
             continue
-        if stable[pos - 1][1]["human_command"] != "forward":
-            continue
+        if command != "forward":
+            break
+        selected.append(sample)
+        if len(selected) == count:
+            break
+    if len(selected) != count:
+        return []
+    selected.reverse()
+    return selected
 
-        pre = []
-        cursor = pos - 1
-        while cursor >= 0 and stable[cursor][1]["human_command"] == "forward":
-            pre.append(stable[cursor])
-            cursor -= 1
-            if len(pre) == boundary_frames:
-                break
-        pre.reverse()
 
-        post = []
-        cursor = pos
-        while cursor < len(stable) and stable[cursor][1]["human_command"] == turn:
-            post.append(stable[cursor])
-            cursor += 1
-            if len(post) == boundary_frames:
-                break
+def save_completed_event(
+    event_id,
+    pending,
+    session_dir,
+    samples_writer,
+    cv2_module,
+):
+    event_dir = session_dir / "boundary_images" / f"event_{event_id:02d}_{pending['turn']}"
+    event_dir.mkdir(parents=True, exist_ok=False)
 
-        if len(pre) != boundary_frames or len(post) != boundary_frames:
-            continue
+    samples = []
+    for offset, sample in zip(
+        range(-BOUNDARY_FRAMES, 0),
+        pending["pre"],
+    ):
+        samples.append(("pre_forward", offset, sample))
+    for offset, sample in enumerate(pending["post"]):
+        samples.append(("post_turn", offset, sample))
 
-        events.append(
+    for side, offset, sample in samples:
+        image_name = (
+            f"{side}_{offset:+03d}_frame_{sample['frame_index']:06d}.jpg"
+        )
+        image_path = event_dir / image_name
+        frame_bgr = cv2_module.cvtColor(
+            sample["frame_rgb"],
+            cv2_module.COLOR_RGB2BGR,
+        )
+        if not cv2_module.imwrite(str(image_path), frame_bgr):
+            raise RuntimeError(f"Could not save boundary image: {image_path}")
+
+        samples_writer.writerow(
             {
-                "turn_class": turn,
-                "onset_row_index": row_index,
-                "onset_frame_index": int(row["frame_index"]),
-                "onset_elapsed_seconds": float(row["elapsed_seconds"]),
-                "pre_rows": [item[1] for item in pre],
-                "post_rows": [item[1] for item in post],
+                "event_id": event_id,
+                "turn_class": pending["turn"],
+                "boundary_side": side,
+                "relative_offset": offset,
+                "frame_index": sample["frame_index"],
+                "timestamp_utc": sample["timestamp_utc"],
+                "elapsed_seconds": sample["elapsed_seconds"],
+                "human_command": sample["human_command"],
+                "image_relative_path": str(image_path.relative_to(session_dir)),
+                "robot_x": sample["robot_x"],
+                "robot_y": sample["robot_y"],
+                "robot_yaw": sample["robot_yaw"],
             }
         )
 
-    return events
 
-
-def write_boundary_events(path, events):
-    fieldnames = [
-        "event_id",
-        "turn_class",
-        "onset_frame_index",
-        "onset_elapsed_seconds",
-        "pre_forward_frame_indices",
-        "post_turn_frame_indices",
-    ]
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        for event_id, event in enumerate(events, start=1):
-            writer.writerow(
-                {
-                    "event_id": event_id,
-                    "turn_class": event["turn_class"],
-                    "onset_frame_index": event["onset_frame_index"],
-                    "onset_elapsed_seconds": f"{event['onset_elapsed_seconds']:.3f}",
-                    "pre_forward_frame_indices": ";".join(
-                        row["frame_index"] for row in event["pre_rows"]
-                    ),
-                    "post_turn_frame_indices": ";".join(
-                        row["frame_index"] for row in event["post_rows"]
-                    ),
-                }
-            )
-
-
-def build_summary(session_id, role, rows, events):
+def build_summary(session_id, role, rows, completed_events, discarded_events):
     scored = [row for row in rows if row["human_command"] in CLASS_NAMES]
-    counts = {
-        name: sum(row["human_command"] == name for row in scored)
-        for name in CLASS_NAMES
-    }
-    left_events = sum(event["turn_class"] == "left" for event in events)
-    right_events = sum(event["turn_class"] == "right" for event in events)
+    counts = Counter(row["human_command"] for row in scored)
+    left_events = sum(event["turn"] == "left" for event in completed_events)
+    right_events = sum(event["turn"] == "right" for event in completed_events)
 
-    lines = [
-        "STEP 5G PAIRED BOUNDARY COLLECTION SUMMARY",
-        "",
-        f"Session ID: {session_id}",
-        f"Role: {role}",
-        f"Total saved frames: {len(rows)}",
-        f"Stable-command frames: {len(scored)}",
-        f"Forward frames: {counts['forward']}",
-        f"Left frames: {counts['left']}",
-        f"Right frames: {counts['right']}",
-        f"Valid left-turn boundary events: {left_events}",
-        f"Valid right-turn boundary events: {right_events}",
-        f"Boundary frames per side: {BOUNDARY_FRAMES}",
-        "",
-        "CNN inference: OFF",
-        "OpenCV GUI display: OFF",
-        "Human W/A/D commands controlled the motors.",
-    ]
-    return "\n".join(lines) + "\n"
+    return "\n".join(
+        [
+            "STEP 5G PAIRED BOUNDARY COLLECTION SUMMARY",
+            "",
+            f"Session ID: {session_id}",
+            f"Role: {role}",
+            f"Metadata samples: {len(rows)}",
+            f"Stable-command samples: {len(scored)}",
+            f"Forward samples: {counts['forward']}",
+            f"Left samples: {counts['left']}",
+            f"Right samples: {counts['right']}",
+            f"Completed left-boundary events: {left_events}",
+            f"Completed right-boundary events: {right_events}",
+            f"Discarded incomplete boundary events: {discarded_events}",
+            f"Saved images: {len(completed_events) * BOUNDARY_FRAMES * 2}",
+            f"Boundary frames per side: {BOUNDARY_FRAMES}",
+            "",
+            "CNN inference: OFF",
+            "OpenCV GUI display: OFF",
+            "Continuous JPEG writing: OFF",
+            "Only completed boundary-event images are written to disk.",
+            "Human W/A/D commands controlled the motors.",
+            "",
+        ]
+    )
 
 
 def main(argv=None):
     args = parse_args(argv)
     output_root = args.output_root.resolve()
     session_dir = output_root / args.session_id
-    frames_dir = session_dir / "frames"
 
     if session_dir.exists():
         raise FileExistsError(f"Session already exists: {session_dir}")
-    frames_dir.mkdir(parents=True)
+    session_dir.mkdir(parents=True)
 
     metadata_path = session_dir / "metadata.csv"
-    events_path = session_dir / "boundary_events.csv"
+    samples_path = session_dir / "boundary_samples.csv"
     summary_path = session_dir / "summary.txt"
 
     sim = None
     left_motor = right_motor = None
-    csv_file = None
+    metadata_file = samples_file = None
     rows = []
+    ring = deque(maxlen=RING_SIZE)
+    pending = None
+    completed_events = []
+    discarded_events = 0
+    previous_stable_command = None
     exit_status = 0
 
     try:
-        print("STEP 5G - Paired Turn-Boundary Collection", flush=True)
+        print("STEP 5G - Low-I/O Paired Turn-Boundary Collection", flush=True)
         print(f"Session: {args.session_id} | role={args.role}", flush=True)
         print("W=forward, A=left, D=right; release keys to stop.", flush=True)
         print("Human controls motors. CNN inference is OFF.", flush=True)
         print("OpenCV GUI display is OFF.", flush=True)
+        print("Continuous JPEG writing is OFF.", flush=True)
         print(f"Session folder: {session_dir}", flush=True)
 
         import cv2
@@ -236,20 +229,38 @@ def main(argv=None):
         camera = sim.getObject(CAMERA_PATH)
         stop_motors(sim, left_motor, right_motor)
 
-        fieldnames = [
+        metadata_fields = [
             "timestamp_utc",
             "elapsed_seconds",
             "frame_index",
+            "human_command",
+            "robot_x",
+            "robot_y",
+            "robot_yaw",
+        ]
+        sample_fields = [
+            "event_id",
+            "turn_class",
+            "boundary_side",
+            "relative_offset",
+            "frame_index",
+            "timestamp_utc",
+            "elapsed_seconds",
             "human_command",
             "image_relative_path",
             "robot_x",
             "robot_y",
             "robot_yaw",
         ]
-        csv_file = metadata_path.open("w", newline="", encoding="utf-8")
-        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
-        writer.writeheader()
-        csv_file.flush()
+
+        metadata_file = metadata_path.open("w", newline="", encoding="utf-8")
+        samples_file = samples_path.open("w", newline="", encoding="utf-8")
+        metadata_writer = csv.DictWriter(metadata_file, fieldnames=metadata_fields)
+        samples_writer = csv.DictWriter(samples_file, fieldnames=sample_fields)
+        metadata_writer.writeheader()
+        samples_writer.writeheader()
+        metadata_file.flush()
+        samples_file.flush()
 
         print("READY: collector initialized. Start/resume CoppeliaSim.", flush=True)
         while sim.getSimulationState() in (
@@ -259,7 +270,7 @@ def main(argv=None):
             time.sleep(0.10)
 
         print(
-            "SIMULATION RUNNING — W/A/D control + paired-boundary capture active.",
+            "SIMULATION RUNNING — W/A/D + low-I/O boundary capture active.",
             flush=True,
         )
         run_started = time.monotonic()
@@ -298,35 +309,87 @@ def main(argv=None):
             elapsed = time.monotonic() - run_started
             position = sim.getObjectPosition(robot, sim.handle_world)
             yaw = sim.getObjectOrientation(robot, sim.handle_world)[2]
-
             frame_index += 1
-            image_name = (
-                f"frame_{frame_index:06d}_"
-                f"{timestamp.strftime('%Y%m%dT%H%M%S%fZ')}.jpg"
-            )
-            image_path = frames_dir / image_name
-            frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-            if not cv2.imwrite(str(image_path), frame_bgr):
-                raise RuntimeError(f"Could not save {image_path}")
 
-            row = {
+            sample = {
                 "timestamp_utc": timestamp.isoformat(),
                 "elapsed_seconds": f"{elapsed:.3f}",
-                "frame_index": str(frame_index),
-                "human_command": stable_label or "",
-                "image_relative_path": str(image_path.relative_to(session_dir)),
+                "frame_index": frame_index,
+                "human_command": stable_label,
                 "robot_x": f"{float(position[0]):.6f}",
                 "robot_y": f"{float(position[1]):.6f}",
                 "robot_yaw": f"{float(yaw):.6f}",
+                "frame_rgb": frame_rgb,
             }
-            writer.writerow(row)
-            csv_file.flush()
-            rows.append(row)
+
+            metadata_row = {
+                key: (sample[key] if sample[key] is not None else "")
+                for key in metadata_fields
+            }
+            metadata_writer.writerow(metadata_row)
+            rows.append(metadata_row)
+            if frame_index % METADATA_FLUSH_EVERY == 0:
+                metadata_file.flush()
+
+            # Complete or invalidate a pending turn event first.
+            if pending is not None and stable_label is not None:
+                if stable_label == pending["turn"]:
+                    pending["post"].append(sample.copy())
+                    if len(pending["post"]) == BOUNDARY_FRAMES:
+                        event_id = len(completed_events) + 1
+                        save_completed_event(
+                            event_id,
+                            pending,
+                            session_dir,
+                            samples_writer,
+                            cv2,
+                        )
+                        samples_file.flush()
+                        completed_events.append(
+                            {
+                                "event_id": event_id,
+                                "turn": pending["turn"],
+                                "onset_frame_index": pending["post"][0]["frame_index"],
+                            }
+                        )
+                        print(
+                            f"BOUNDARY EVENT SAVED: id={event_id} "
+                            f"turn={pending['turn']} "
+                            f"onset_frame={pending['post'][0]['frame_index']}",
+                            flush=True,
+                        )
+                        pending = None
+                elif stable_label != pending["turn"]:
+                    discarded_events += 1
+                    pending = None
+
+            # Start a new event only on a forward -> turn stable-command edge.
+            if (
+                pending is None
+                and stable_label in ("left", "right")
+                and previous_stable_command == "forward"
+            ):
+                pre = recent_forward_samples(ring)
+                if len(pre) == BOUNDARY_FRAMES:
+                    pending = {
+                        "turn": stable_label,
+                        "pre": [
+                            {**item, "frame_rgb": item["frame_rgb"].copy()}
+                            for item in pre
+                        ],
+                        "post": [sample.copy()],
+                    }
+
+            ring.append(sample)
+
+            if stable_label is not None:
+                previous_stable_command = stable_label
 
             if frame_index == 1 or frame_index % 100 == 0:
                 print(
                     f"t={elapsed:.1f}s frames={frame_index} "
-                    f"human={stable_label or 'none':<7}",
+                    f"human={stable_label or 'none':<7} "
+                    f"events={len(completed_events)}",
                     flush=True,
                 )
 
@@ -342,16 +405,26 @@ def main(argv=None):
     finally:
         if sim is not None and not stop_motors(sim, left_motor, right_motor):
             exit_status = 1
-        if csv_file is not None:
-            csv_file.close()
+        if pending is not None:
+            discarded_events += 1
+        if metadata_file is not None:
+            metadata_file.flush()
+            metadata_file.close()
+        if samples_file is not None:
+            samples_file.flush()
+            samples_file.close()
 
-        events = detect_boundary_events(rows)
-        write_boundary_events(events_path, events)
-        summary = build_summary(args.session_id, args.role, rows, events)
+        summary = build_summary(
+            args.session_id,
+            args.role,
+            rows,
+            completed_events,
+            discarded_events,
+        )
         summary_path.write_text(summary, encoding="utf-8")
         print(summary, end="", flush=True)
         print(f"Metadata: {metadata_path}", flush=True)
-        print(f"Events: {events_path}", flush=True)
+        print(f"Boundary samples: {samples_path}", flush=True)
         print(f"Summary: {summary_path}", flush=True)
 
     return exit_status

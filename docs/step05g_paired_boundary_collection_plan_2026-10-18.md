@@ -60,3 +60,35 @@ Do not train the next model until:
 - each session contains usable left and right boundary events.
 
 Do not run autonomous Step 6 during this stage.
+
+
+## Crash during first train-01 attempt
+
+The first `boundary_train_01` attempt crashed CoppeliaSim at approximately 18:34:39 local time before the first turn was reached.
+
+Windows recorded:
+- application: coppeliaSim.exe
+- module: ntdll.dll
+- exception: 0xc0000374
+
+The partial session contained 915 captured frames but only 131 stable forward-command frames and no turn boundary. It is archived as:
+- boundary_train_01_crashed_20261018T183439
+
+This partial session is excluded from training and validation.
+
+Because the crash occurred with CNN inference OFF and OpenCV GUI display OFF, neither CNN inference nor the GUI display path is required to trigger the intermittent simulator failure.
+
+Compared with the previously stable manual+raw-camera diagnostic, the main extra runtime load in the first Step 5G collector was continuous JPEG encoding/writing plus metadata/pose logging. Continuous JPEG writing is therefore an actionable remaining difference, but it is not proven to be the root cause.
+
+## Low-I/O revision
+
+The Step 5G collector now:
+- keeps a small rolling camera buffer in memory;
+- writes lightweight metadata only every sample;
+- flushes metadata in batches;
+- writes JPEGs only after a complete turn-boundary event is confirmed;
+- saves exactly five stable forward frames before onset and five true-turn frames after onset;
+- keeps CNN inference OFF;
+- keeps OpenCV GUI display OFF.
+
+A fresh `boundary_train_01` attempt should use only this low-I/O collector.
