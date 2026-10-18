@@ -49,3 +49,20 @@ Observed process evidence:
 - no new CoppeliaSim Application Error / Windows Error Reporting crash event occurred during this run
 
 This strengthens, but does not yet prove, the hypothesis that the failure may be control-rate sensitive. The next controlled A/B check is to run the same diagnostic script with `--interval 0.05` from a clean scene reset. If the 50 ms variant reproduces the crash while the 100 ms variant remains stable, the control-call cadence hypothesis becomes substantially stronger. If 50 ms also remains stable, the crash should be treated as intermittent and another variable must be isolated.
+
+
+## 50 ms A/B comparison result
+
+The same control-rate diagnostic also remained stable with `--interval 0.05` past the prior failure area.
+
+Observed process evidence:
+- at least 2,700 control loops completed
+- approximately 249 seconds of runtime before cleanup
+- CoppeliaSim remained alive
+- no new CoppeliaSim crash event occurred during this run
+
+This materially weakens the simple control-rate hypothesis. The 50 ms cadence alone is not sufficient to reproduce the crash.
+
+Current interpretation: the CoppeliaSim `0xc0000374` failure is intermittent. It is not deterministically tied to the second-turn maze location, persistent ZMQ connectivity, or 50 ms motor-command cadence.
+
+The next isolation layer is vision-sensor acquisition without motor control, OpenCV display, TensorFlow, or CNN inference. If that is stable, the next combined diagnostic should add manual motor control plus camera acquisition while still excluding TensorFlow/CNN inference.
