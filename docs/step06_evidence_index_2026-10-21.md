@@ -78,3 +78,6 @@ The evidence supports the following concise narrative:
 9. The remaining Step 6 question is therefore one of target observability/control interpretation, now escalated to the professor for scope clarification.
 
 This is the preferred evidence-backed storyline for later academic reporting.
+
+16. `steps01_to_06_academic_evidence_matrix_2026-10-21.md`
+    - submission-facing requirement ? implementation ? evidence ? status ? artifact-location matrix for Steps 1–6, plus deliverable crosswalk and remaining evidence gaps.
