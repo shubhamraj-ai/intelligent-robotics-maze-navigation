@@ -1,26 +1,72 @@
-"""Drive the PioneerP3DX manually with the W, A, and D keys."""
+"""Drive the PioneerP3DX manually with a simple, tunable motion profile.
 
+This Step-2 controller is deliberately minimal:
+- W drives both wheels forward.
+- A/D use forward-only differential wheel speeds to create curved turns.
+- The motion profile is shared with Step 4 so training-data collection uses
+  exactly the same robot motion that is manually calibrated here.
+"""
+
+from __future__ import annotations
+
+import json
 import sys
 import time
+from pathlib import Path
 
 import keyboard
 from coppeliasim_zmqremoteapi_client import RemoteAPIClient
 
 
-FORWARD_SPEED = 2.0
-TURN_SPEED = 2.0
-CONTROL_INTERVAL_SECONDS = 0.05
+REPO_ROOT = Path(__file__).resolve().parents[2]
+MOTION_PROFILE_PATH = REPO_ROOT / "config" / "motion_profile.json"
 
 
-def get_wheel_velocities():
-    """Return the wheel velocities for the currently held driving key."""
-    if keyboard.is_pressed("w"):
-        return FORWARD_SPEED, FORWARD_SPEED
-    if keyboard.is_pressed("a"):
-        return -TURN_SPEED, TURN_SPEED
-    if keyboard.is_pressed("d"):
-        return TURN_SPEED, -TURN_SPEED
-    return 0.0, 0.0
+def load_motion_profile(path: Path = MOTION_PROFILE_PATH) -> dict[str, float]:
+    """Load and validate the professor-aligned manual driving parameters."""
+    profile = json.loads(path.read_text(encoding="utf-8"))
+
+    required = {
+        "forward_speed",
+        "turn_outer_speed",
+        "turn_inner_speed",
+        "control_interval_seconds",
+    }
+    missing = required - set(profile)
+    if missing:
+        raise ValueError(f"Motion profile is missing: {sorted(missing)}")
+
+    values = {name: float(profile[name]) for name in required}
+    if values["forward_speed"] <= 0:
+        raise ValueError("forward_speed must be > 0")
+    if values["turn_outer_speed"] <= 0:
+        raise ValueError("turn_outer_speed must be > 0")
+    if values["turn_inner_speed"] < 0:
+        raise ValueError("turn_inner_speed must be >= 0")
+    if values["turn_inner_speed"] >= values["turn_outer_speed"]:
+        raise ValueError("turn_inner_speed must be lower than turn_outer_speed")
+    if values["control_interval_seconds"] <= 0:
+        raise ValueError("control_interval_seconds must be > 0")
+
+    return values
+
+
+def get_command(keyboard_module, profile: dict[str, float]):
+    """Return one unambiguous W/A/D command and its wheel velocities."""
+    held = [key for key in ("w", "a", "d") if keyboard_module.is_pressed(key)]
+    if len(held) != 1:
+        return None, 0.0, 0.0
+
+    key = held[0]
+    if key == "w":
+        speed = profile["forward_speed"]
+        return "forward", speed, speed
+
+    inner = profile["turn_inner_speed"]
+    outer = profile["turn_outer_speed"]
+    if key == "a":
+        return "left", inner, outer
+    return "right", outer, inner
 
 
 def stop_motors(sim, left_motor, right_motor):
@@ -34,16 +80,20 @@ def stop_motors(sim, left_motor, right_motor):
             sim.setJointTargetVelocity(motor, 0.0)
         except Exception as error:
             cleanup_succeeded = False
-            print(f"STEP 2 CLEANUP ERROR: Could not stop a motor: {error}", file=sys.stderr)
+            print(
+                f"STEP 2 CLEANUP ERROR: Could not stop a motor: {error}",
+                file=sys.stderr,
+            )
 
     return cleanup_succeeded
 
 
 def main():
-    print("STEP 2 — Manual Robot Control")
+    print("STEP 2 — Manual Robot Control / Motion Calibration")
     print("W - Forward")
-    print("A - Left")
-    print("D - Right")
+    print("A - Curved left")
+    print("D - Curved right")
+    print("Release keys (or press multiple W/A/D keys) to stop.")
 
     sim = None
     left_motor = None
@@ -51,6 +101,19 @@ def main():
     exit_status = 0
 
     try:
+        profile = load_motion_profile()
+        print(f"Motion profile: {MOTION_PROFILE_PATH}")
+        print(
+            "Speeds: "
+            f"forward={profile['forward_speed']:.2f}, "
+            f"turn inner={profile['turn_inner_speed']:.2f}, "
+            f"turn outer={profile['turn_outer_speed']:.2f}"
+        )
+        print(
+            "These are initial calibration values. "
+            "Manually validate the full maze before collecting new training data."
+        )
+
         try:
             client = RemoteAPIClient()
             sim = client.require("sim")
@@ -59,14 +122,11 @@ def main():
                 f"Could not connect to the CoppeliaSim ZMQ Remote API: {error}"
             ) from error
 
-        required_paths = (
+        for object_path in (
             "/PioneerP3DX",
             "/PioneerP3DX/leftMotor",
             "/PioneerP3DX/rightMotor",
-        )
-        object_handles = {}
-
-        for object_path in required_paths:
+        ):
             try:
                 object_handle = sim.getObject(object_path)
                 if object_handle == -1:
@@ -75,7 +135,6 @@ def main():
                 raise RuntimeError(
                     f"Could not resolve scene object {object_path}: {error}"
                 ) from error
-            object_handles[object_path] = object_handle
 
             if object_path == "/PioneerP3DX/leftMotor":
                 left_motor = object_handle
@@ -83,10 +142,10 @@ def main():
                 right_motor = object_handle
 
         while True:
-            left_velocity, right_velocity = get_wheel_velocities()
+            _, left_velocity, right_velocity = get_command(keyboard, profile)
             sim.setJointTargetVelocity(left_motor, left_velocity)
             sim.setJointTargetVelocity(right_motor, right_velocity)
-            time.sleep(CONTROL_INTERVAL_SECONDS)
+            time.sleep(profile["control_interval_seconds"])
     except KeyboardInterrupt:
         pass
     except Exception as error:

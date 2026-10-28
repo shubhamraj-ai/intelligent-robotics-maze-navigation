@@ -222,3 +222,7 @@ dataset/
 # Local trained models and runtime shadow-validation logs
 models/*.h5
 shadow_logs/
+
+# Professor-aligned replacement dataset
+dataset_simplified/
+models/*.b64

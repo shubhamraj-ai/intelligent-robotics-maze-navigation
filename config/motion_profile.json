@@ -1,0 +1,6 @@
+{
+  "forward_speed": 1.0,
+  "turn_outer_speed": 1.0,
+  "turn_inner_speed": 0.25,
+  "control_interval_seconds": 0.05
+}

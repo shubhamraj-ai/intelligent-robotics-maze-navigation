@@ -1,29 +1,88 @@
-"""Record labelled camera images during W/A/D manual navigation."""
+"""Record cleaner W/A/D-labelled camera images for neural-network training.
 
+The code intentionally remains close to the original Step-4 recorder while
+addressing the factors highlighted by the professor:
+- it uses the exact same tunable speed/curvature profile as Step 2;
+- it records only after a command has remained stable briefly;
+- it saves forward frames less frequently than turn frames to reduce the
+  previous extreme forward-class dominance;
+- filenames include a session ID so later training can keep traversals separate.
+"""
+
+from __future__ import annotations
+
+import json
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 
-FORWARD_SPEED = 2.0
-TURN_SPEED = 2.0
-SAVE_INTERVAL_SECONDS = 0.10
-LOOP_INTERVAL_SECONDS = 0.10
-DATASET_PATH = Path(__file__).resolve().parents[2] / "dataset"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+MOTION_PROFILE_PATH = REPO_ROOT / "config" / "motion_profile.json"
+DATASET_PATH = REPO_ROOT / "dataset_simplified"
 CAMERA_PATH = "/PioneerP3DX/cam1"
 
+# Recording policy: keep it simple and visible.
+MIN_STABLE_COMMAND_SECONDS = 0.20
+FORWARD_SAVE_INTERVAL_SECONDS = 0.30
+TURN_SAVE_INTERVAL_SECONDS = 0.10
 
-def get_command(keyboard):
-    """Take one key snapshot; ambiguous input must stop the robot."""
-    held_keys = [key for key in ("w", "a", "d") if keyboard.is_pressed(key)]
-    if len(held_keys) != 1:
+
+def load_motion_profile(path: Path = MOTION_PROFILE_PATH) -> dict[str, float]:
+    """Load the same motion profile manually calibrated in Step 2."""
+    profile = json.loads(path.read_text(encoding="utf-8"))
+
+    required = {
+        "forward_speed",
+        "turn_outer_speed",
+        "turn_inner_speed",
+        "control_interval_seconds",
+    }
+    missing = required - set(profile)
+    if missing:
+        raise ValueError(f"Motion profile is missing: {sorted(missing)}")
+
+    values = {name: float(profile[name]) for name in required}
+    if values["forward_speed"] <= 0:
+        raise ValueError("forward_speed must be > 0")
+    if values["turn_outer_speed"] <= 0:
+        raise ValueError("turn_outer_speed must be > 0")
+    if values["turn_inner_speed"] < 0:
+        raise ValueError("turn_inner_speed must be >= 0")
+    if values["turn_inner_speed"] >= values["turn_outer_speed"]:
+        raise ValueError("turn_inner_speed must be lower than turn_outer_speed")
+    if values["control_interval_seconds"] <= 0:
+        raise ValueError("control_interval_seconds must be > 0")
+
+    return values
+
+
+def get_command(keyboard_module, profile: dict[str, float]):
+    """Return one stable W/A/D label and the matching calibrated wheel speeds."""
+    held = [key for key in ("w", "a", "d") if keyboard_module.is_pressed(key)]
+    if len(held) != 1:
         return None, 0.0, 0.0
-    if held_keys[0] == "w":
-        return "forward", FORWARD_SPEED, FORWARD_SPEED
-    if held_keys[0] == "a":
-        return "left", -TURN_SPEED, TURN_SPEED
-    return "right", TURN_SPEED, -TURN_SPEED
+
+    key = held[0]
+    if key == "w":
+        speed = profile["forward_speed"]
+        return "forward", speed, speed
+
+    inner = profile["turn_inner_speed"]
+    outer = profile["turn_outer_speed"]
+    if key == "a":
+        return "left", inner, outer
+    return "right", outer, inner
+
+
+def save_interval_for(label: str) -> float:
+    """Subsample long forward runs more strongly than shorter turn states."""
+    if label == "forward":
+        return FORWARD_SAVE_INTERVAL_SECONDS
+    if label in ("left", "right"):
+        return TURN_SAVE_INTERVAL_SECONDS
+    raise ValueError(f"Unknown label: {label}")
 
 
 def convert_image(raw_image, resolution, np, cv2):
@@ -32,26 +91,55 @@ def convert_image(raw_image, resolution, np, cv2):
         raise ValueError(f"Expected [width, height], received {resolution}")
     width, height = resolution
     if not all(isinstance(value, int) and value > 0 for value in resolution):
-        raise ValueError(f"Camera resolution must contain positive integers: {resolution}")
+        raise ValueError(
+            f"Camera resolution must contain positive integers: {resolution}"
+        )
     expected_bytes = width * height * 3
     if len(raw_image) != expected_bytes:
-        raise ValueError(f"Expected {expected_bytes} RGB bytes, received {len(raw_image)}")
+        raise ValueError(
+            f"Expected {expected_bytes} RGB bytes, received {len(raw_image)}"
+        )
     frame = np.frombuffer(raw_image, dtype=np.uint8).reshape(height, width, 3)
     frame = cv2.flip(frame, 0)
     return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
 
+def print_distribution(counters: dict[str, int]) -> None:
+    """Print the session distribution so imbalance is visible immediately."""
+    total = sum(counters.values())
+    print("Saved images: " + ", ".join(f"{k}={v}" for k, v in counters.items()))
+    if not total:
+        return
+
+    shares = {label: count / total for label, count in counters.items()}
+    print(
+        "Class distribution: "
+        + ", ".join(f"{label}={share:.1%}" for label, share in shares.items())
+    )
+    if max(shares.values()) > 0.70:
+        print(
+            "STEP 4 DATA WARNING: One class exceeds 70% of this session. "
+            "Before Step 5, collect additional clean examples for the underrepresented "
+            "classes instead of relying immediately on strong class weighting."
+        )
+
+
 def main():
     print("STEP 4 - Training Data Recording")
-    print("W - Forward; A - Left; D - Right. Release keys to stop.")
+    print("W - Forward; A - Curved left; D - Curved right.")
+    print("Release keys (or press multiple W/A/D keys) to stop.")
     print("Start the simulation in CoppeliaSim; use terminal Ctrl+C to exit.")
+
     sim = None
     cv2 = None
     left_motor = None
     right_motor = None
     counters = {"forward": 0, "left": 0, "right": 0}
-    last_save_time = None
+    last_save_time = {label: None for label in counters}
+    active_label = None
+    active_since = None
     exit_status = 0
+    session_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
     try:
         import cv2
@@ -59,11 +147,32 @@ def main():
         import numpy as np
         from coppeliasim_zmqremoteapi_client import RemoteAPIClient
 
+        profile = load_motion_profile()
+        print(f"Session ID: {session_id}")
+        print(f"Motion profile: {MOTION_PROFILE_PATH}")
+        print(
+            "Speeds: "
+            f"forward={profile['forward_speed']:.2f}, "
+            f"turn inner={profile['turn_inner_speed']:.2f}, "
+            f"turn outer={profile['turn_outer_speed']:.2f}"
+        )
+        print(
+            "Recording policy: "
+            f"stable command >= {MIN_STABLE_COMMAND_SECONDS:.2f}s; "
+            f"forward every {FORWARD_SAVE_INTERVAL_SECONDS:.2f}s; "
+            f"turn every {TURN_SAVE_INTERVAL_SECONDS:.2f}s."
+        )
+
         client = RemoteAPIClient()
         sim = client.require("sim")
         handles = {}
-        for path in ("/PioneerP3DX", "/PioneerP3DX/leftMotor",
-                     "/PioneerP3DX/rightMotor", CAMERA_PATH):
+
+        for path in (
+            "/PioneerP3DX",
+            "/PioneerP3DX/leftMotor",
+            "/PioneerP3DX/rightMotor",
+            CAMERA_PATH,
+        ):
             handle = sim.getObject(path)
             if handle < 0:
                 raise RuntimeError(f"Could not resolve scene object {path}")
@@ -78,39 +187,75 @@ def main():
 
         while True:
             loop_started = time.monotonic()
-            if sim.getSimulationState() in (sim.simulation_stopped, sim.simulation_paused):
-                raise RuntimeError("Simulation is stopped or paused; start it in CoppeliaSim.")
+            if sim.getSimulationState() in (
+                sim.simulation_stopped,
+                sim.simulation_paused,
+            ):
+                raise RuntimeError(
+                    "Simulation is stopped or paused; start it in CoppeliaSim."
+                )
 
-            label, left_velocity, right_velocity = get_command(keyboard)
+            before_label, left_velocity, right_velocity = get_command(
+                keyboard, profile
+            )
             sim.setJointTargetVelocity(left_motor, left_velocity)
             sim.setJointTargetVelocity(right_motor, right_velocity)
+
             raw_image, resolution = sim.getVisionSensorImg(handles[CAMERA_PATH])
             frame = convert_image(raw_image, resolution, np, cv2)
             cv2.imshow("PioneerP3DX Training Data", frame)
             cv2.waitKey(1)
 
-            # Recheck keys after image acquisition so released/changed keys are not saved.
-            current_label, left_velocity, right_velocity = get_command(keyboard)
+            after_label, left_velocity, right_velocity = get_command(
+                keyboard, profile
+            )
             sim.setJointTargetVelocity(left_motor, left_velocity)
             sim.setJointTargetVelocity(right_motor, right_velocity)
-            now = time.monotonic()
-            if label is not None and current_label == label:
-                if last_save_time is None or now - last_save_time >= SAVE_INTERVAL_SECONDS:
-                    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-                    counter = counters[label] + 1
-                    filename = f"{label}_{timestamp}_{counter:06d}.jpg"
-                    image_path = DATASET_PATH / label / filename
-                    # Never overwrite a file from an earlier recording session.
-                    while image_path.exists():
-                        counter += 1
-                        filename = f"{label}_{timestamp}_{counter:06d}.jpg"
-                        image_path = DATASET_PATH / label / filename
-                    if not cv2.imwrite(str(image_path), frame):
-                        raise RuntimeError(f"Could not save image {image_path}")
-                    counters[label] += 1
-                    last_save_time = now
 
-            remaining = LOOP_INTERVAL_SECONDS - (time.monotonic() - loop_started)
+            now = time.monotonic()
+            stable_label = (
+                before_label
+                if before_label is not None and after_label == before_label
+                else None
+            )
+
+            if stable_label is None:
+                active_label = None
+                active_since = None
+            else:
+                if stable_label != active_label:
+                    active_label = stable_label
+                    active_since = now
+                elif (
+                    active_since is not None
+                    and now - active_since >= MIN_STABLE_COMMAND_SECONDS
+                ):
+                    interval = save_interval_for(stable_label)
+                    last_saved = last_save_time[stable_label]
+                    if last_saved is None or now - last_saved >= interval:
+                        timestamp = datetime.now(timezone.utc).strftime(
+                            "%Y%m%dT%H%M%S%fZ"
+                        )
+                        counter = counters[stable_label] + 1
+                        filename = (
+                            f"{session_id}_{stable_label}_{timestamp}_{counter:06d}.jpg"
+                        )
+                        image_path = DATASET_PATH / stable_label / filename
+
+                        while image_path.exists():
+                            counter += 1
+                            filename = (
+                                f"{session_id}_{stable_label}_{timestamp}_{counter:06d}.jpg"
+                            )
+                            image_path = DATASET_PATH / stable_label / filename
+
+                        if not cv2.imwrite(str(image_path), frame):
+                            raise RuntimeError(f"Could not save image {image_path}")
+
+                        counters[stable_label] += 1
+                        last_save_time[stable_label] = now
+
+            remaining = profile["control_interval_seconds"] - (time.monotonic() - loop_started)
             if remaining > 0:
                 time.sleep(remaining)
     except KeyboardInterrupt:
@@ -125,15 +270,24 @@ def main():
                     try:
                         sim.setJointTargetVelocity(motor, 0.0)
                     except Exception as error:
-                        print(f"STEP 4 CLEANUP ERROR: Could not stop a motor: {error}", file=sys.stderr)
+                        print(
+                            f"STEP 4 CLEANUP ERROR: Could not stop a motor: {error}",
+                            file=sys.stderr,
+                        )
                         exit_status = 1
+
         if cv2 is not None:
             try:
                 cv2.destroyAllWindows()
             except Exception as error:
-                print(f"STEP 4 CLEANUP ERROR: Could not close OpenCV windows: {error}", file=sys.stderr)
+                print(
+                    f"STEP 4 CLEANUP ERROR: Could not close OpenCV windows: {error}",
+                    file=sys.stderr,
+                )
                 exit_status = 1
-        print("Saved images: " + ", ".join(f"{label}={count}" for label, count in counters.items()))
+
+        print(f"Session ID: {session_id}")
+        print_distribution(counters)
 
     return exit_status
 
