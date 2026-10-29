@@ -1,4 +1,4 @@
-# Professor-aligned Step 2 / Step 4 simplification â€” 2026-10-28
+﻿# Professor-aligned Step 2 / Step 4 simplification Ã¢â‚¬â€ 2026-10-28
 
 ## Why this revision exists
 
@@ -17,10 +17,10 @@ The original W/A/D motion used point turns:
 The revised initial calibration profile is:
 
 - forward: (+1.0, +1.0)
-- left: (+0.25, +1.0)
-- right: (+1.0, +0.25)
+- left: (+0.10, +1.0)
+- right: (+1.0, +0.10)
 
-These are **initial calibration values, not final values**.
+Manual calibration on 2026-10-29 found forward speed 1.00 and inner-wheel turn speed 0.10 to feel appropriate at the first corner in CoppeliaSim 4.9. These values are now the accepted Step-2 starting profile for continued full-maze validation.
 
 They move both wheels forward during normal turns and therefore create curved differential-drive motion rather than an in-place pivot.
 
@@ -32,7 +32,7 @@ The profile must be manually validated through the complete maze before new trai
 
 ## Step 4 change
 
-The recorder keeps the required W/A/D â†’ forward/left/right labels and the original three class folders.
+The recorder keeps the required W/A/D Ã¢â€ â€™ forward/left/right labels and the original three class folders.
 
 It now:
 
@@ -71,3 +71,16 @@ First manually drive the full maze using Step 2 and tune only:
 until the robot can navigate smoothly and consistently.
 
 Only after the motion profile is accepted should Step 4 be used for fresh data collection.
+
+## Local simulator stability note — 2026-10-29
+
+CoppeliaSim 4.7 repeatedly crashed on the current laptop with the native Windows
+`ntdll.dll / 0xc0000374` heap-corruption signature.
+
+CoppeliaSim 4.9.0 rev6 was stable long enough to validate:
+- forward speed 1.00: good;
+- turn inner speed 0.10 with outer speed 1.00: good at the first corner.
+
+CoppeliaSim 4.9 later also closed/crashed during continued local testing. The
+motion profile is therefore preserved, but further simulator work should move to
+a more stable runtime environment rather than continue repeated local retries.
