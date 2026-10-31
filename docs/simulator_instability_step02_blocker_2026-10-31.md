@@ -213,3 +213,61 @@ No simulator-dependent development should resume until at least one of the follo
 3. a different execution environment is selected based on evidence, cost, and compatibility.
 
 Once a stable simulator environment is available, resume from **Step 2 full-maze validation**. Do not skip directly to Step 4, Step 5, Step 6, or Step 7.
+
+
+## 11. AirGPU support response — alternative access path
+
+On 2026-10-31, AirGPU replied to the support case from `support@airgpu.com`.
+
+The message was signed:
+
+- **Sven Frese**
+- **Founder**
+- **AirGPU**
+
+The support response stated that, if Moonlight does not work well from the client device, the AirGPU machine can instead be accessed using:
+
+1. **Microsoft Remote Desktop (RDP)**; or
+2. **Parsec**.
+
+AirGPU also supplied its Parsec connection guide and asked the user to report back if the problem persists.
+
+### Project interpretation
+
+This materially changes the cloud blocker.
+
+The AirGPU VM itself is no longer treated as unusable merely because Moonlight failed. AirGPU has confirmed two alternative access routes.
+
+The preferred project sequence is now:
+
+1. keep Moonlight abandoned for this project unless later evidence requires revisiting it;
+2. use Microsoft Remote Desktop as the lowest-friction bootstrap/admin connection;
+3. once inside the AirGPU Windows VM, install and configure Parsec;
+4. close the RDP session before graphics-intensive simulator validation;
+5. use Parsec as the preferred interactive connection for CoppeliaSim because the project depends on a responsive graphical/OpenGL environment;
+6. only after stable Parsec access is confirmed, continue the cloud setup sequence:
+   - verify Windows/Tesla T4 state;
+   - install Git;
+   - install Python 3.11;
+   - install CoppeliaSim 4.9.0 rev6;
+   - clone the repository;
+   - checkout `step-05-06-simplified-baseline`;
+   - verify the expected commit;
+   - create a clean Python environment;
+   - install minimum Step-2 dependencies;
+   - transfer/open the working maze scene without overwriting the professor's original;
+   - verify Python-CoppeliaSim ZMQ;
+   - perform the required Step-2 full-maze validation.
+
+### Cost-control rule
+
+Do not start paid AirGPU runtime until the local RDP/Parsec prerequisites are prepared.
+
+During the next paid session:
+
+- attempt RDP first;
+- if RDP fails before desktop access, stop promptly and return to AirGPU support rather than retrying Moonlight;
+- if RDP works, configure Parsec during that same bounded session;
+- stop the VM after the bootstrap milestone if substantial simulator setup would otherwise extend the session unnecessarily.
+
+This support response reduces the need to move immediately to AWS or another provider. Alternative providers remain contingency options only if both AirGPU-supported access paths fail.
