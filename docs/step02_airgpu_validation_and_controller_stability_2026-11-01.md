@@ -1,4 +1,4 @@
-﻿# Step-2 AirGPU Validation and Controller-Stability Evidence
+# Step-2 AirGPU Validation and Controller-Stability Evidence
 
 **Project:** Intelligent Robotics for Energy Infrastructure â€” Design Project
 **Date:** 2026-11-01
@@ -176,5 +176,3 @@ The validated Step-2 controller was retested on the Lenovo using **CoppeliaSim E
 Therefore the event-driven/state-change controller remains the validated workaround for the AirGPU failure mode, but it is **not sufficient to make the Lenovo simulator environment reliable**.
 
 Project decision: retain **AirGPU as the validated simulator environment** and avoid further repeated local CoppeliaSim retries during the core project. The detailed local evidence is recorded in `docs/lenovo_local_validation_failure_coppeliasim_490_2026-11-02.md`.
-
-
