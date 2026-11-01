@@ -1,7 +1,8 @@
-﻿> **Resolution update — 2026-11-01:** Step 2 is no longer blocked. AirGPU isolation tests passed, and two complete full-maze traversals succeeded with event-driven/state-change manual control. The validated evidence and cautious root-cause interpretation are recorded in docs/step02_airgpu_validation_and_controller_stability_2026-11-01.md. The historical blocker record below is retained for traceability.
+> **Resolution update — 2026-11-01:** Step 2 is no longer blocked. AirGPU isolation tests passed, and two complete full-maze traversals succeeded with event-driven/state-change manual control. The validated evidence and cautious root-cause interpretation are recorded in docs/step02_airgpu_validation_and_controller_stability_2026-11-01.md. The historical blocker record below is retained for traceability.
+
 # Simulator Instability, Step-2 Validation Blocker, and Academic Evidence Record
 
-**Project:** Intelligent Robotics for Energy Infrastructure â€” Design Project  
+**Project:** Intelligent Robotics for Energy Infrastructure — Design Project  
 **Date:** 2026-10-31  
 **Active branch:** `step-05-06-simplified-baseline`  
 **Baseline commit before this documentation update:** `f8ca87fac275f94aa19ba9a7abe5f8387b31d278`
@@ -216,7 +217,7 @@ No simulator-dependent development should resume until at least one of the follo
 Once a stable simulator environment is available, resume from **Step 2 full-maze validation**. Do not skip directly to Step 4, Step 5, Step 6, or Step 7.
 
 
-## 11. AirGPU support response â€” alternative access path
+## 11. AirGPU support response — alternative access path
 
 On 2026-10-31, AirGPU replied to the support case from `support@airgpu.com`.
 
@@ -272,4 +273,3 @@ During the next paid session:
 - stop the VM after the bootstrap milestone if substantial simulator setup would otherwise extend the session unnecessarily.
 
 This support response reduces the need to move immediately to AWS or another provider. Alternative providers remain contingency options only if both AirGPU-supported access paths fail.
-
