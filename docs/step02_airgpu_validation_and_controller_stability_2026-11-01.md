@@ -163,3 +163,17 @@ Before stopping the successful AirGPU session:
 - the repository, Python environment, CoppeliaSim installation, working scene, and diagnostic files were intentionally preserved on the stopped VM for possible future fallback use.
 
 No AirGPU runtime is required for the code/test/documentation stage that follows.
+
+## Local Lenovo follow-up — 2026-11-02
+
+The validated Step-2 controller was retested on the Lenovo using **CoppeliaSim Edu 4.9.0 rev6**, matching the successful AirGPU simulator build.
+
+- the short W/A/D smoke test passed;
+- the first full-maze traversal then crashed shortly before the second turn;
+- Windows recorded `Application Error` / WER with `coppeliaSim.exe`, `ntdll.dll`, and exception `0xc0000374` (`STATUS_HEAP_CORRUPTION`);
+- the same exception family had also been observed with the older local CoppeliaSim 4.7 build.
+
+Therefore the event-driven/state-change controller remains the validated workaround for the AirGPU failure mode, but it is **not sufficient to make the Lenovo simulator environment reliable**.
+
+Project decision: retain **AirGPU as the validated simulator environment** and avoid further repeated local CoppeliaSim retries during the core project. The detailed local evidence is recorded in `docs/lenovo_local_validation_failure_coppeliasim_490_2026-11-02.md`.
+
