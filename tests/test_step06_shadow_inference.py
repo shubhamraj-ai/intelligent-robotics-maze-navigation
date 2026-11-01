@@ -69,6 +69,16 @@ class ShadowInferenceTests(unittest.TestCase):
             (None, 0.0, 0.0),
         )
 
+    def test_event_driven_human_command_mapping(self):
+        self.assertEqual(
+            shadow.human_command_from_held_keys({"w"}),
+            ("forward", 2.0, 2.0),
+        )
+        self.assertEqual(
+            shadow.human_command_from_held_keys({"w", "a"}),
+            (None, 0.0, 0.0),
+        )
+
     def test_motor_gate_suppresses_duplicate_writes(self):
         sim = FakeSim()
         previous = None

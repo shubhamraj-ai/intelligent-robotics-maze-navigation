@@ -98,6 +98,13 @@ class ProfessorAlignedMotionTests(unittest.TestCase):
             ("left", 0.0), ("right", 0.0),
         ])
 
+    def test_step4_command_from_held_keys_matches_step2(self):
+        for held in ({"w"}, {"a"}, {"d"}, set(), {"w", "a"}):
+            self.assertEqual(
+                step4.command_from_held_keys(held, self.profile),
+                step2.command_from_held_keys(held, self.profile),
+            )
+
     def test_step4_motor_gate_suppresses_duplicate_writes(self):
         sim = FakeSim()
         previous = None

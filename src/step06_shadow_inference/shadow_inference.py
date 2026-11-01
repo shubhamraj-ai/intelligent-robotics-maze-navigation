@@ -6,6 +6,7 @@ import argparse
 import csv
 import socket
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -107,9 +108,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def get_human_command(keyboard_module):
+def human_command_from_held_keys(held_keys):
     """Return one unambiguous W/A/D command and its manual wheel velocities."""
-    held = [key for key in ("w", "a", "d") if keyboard_module.is_pressed(key)]
+    held = [key for key in ("w", "a", "d") if key in held_keys]
     if len(held) != 1:
         return None, 0.0, 0.0
     if held[0] == "w":
@@ -117,6 +118,36 @@ def get_human_command(keyboard_module):
     if held[0] == "a":
         return "left", -TURN_SPEED, TURN_SPEED
     return "right", TURN_SPEED, -TURN_SPEED
+
+
+def get_human_command(keyboard_module):
+    """Compatibility helper for tests/tools that expose is_pressed()."""
+    held = {key for key in ("w", "a", "d") if keyboard_module.is_pressed(key)}
+    return human_command_from_held_keys(held)
+
+
+class KeyboardState:
+    """Maintain W/A/D state from keyboard events without polling is_pressed()."""
+
+    def __init__(self):
+        self._held = set()
+        self._lock = threading.Lock()
+
+    def handle_event(self, event):
+        key = (getattr(event, "name", "") or "").lower()
+        if key not in {"w", "a", "d"}:
+            return
+
+        event_type = getattr(event, "event_type", "")
+        with self._lock:
+            if event_type == "down":
+                self._held.add(key)
+            elif event_type == "up":
+                self._held.discard(key)
+
+    def snapshot(self):
+        with self._lock:
+            return set(self._held)
 
 
 def apply_motor_command_if_changed(
@@ -256,6 +287,8 @@ def main(argv: list[str] | None = None) -> int:
     exit_status = 0
     metrics = ShadowMetrics()
     last_motor_command = None
+    keyboard_hook = None
+    keyboard_state = KeyboardState()
 
     run_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -280,6 +313,7 @@ def main(argv: list[str] | None = None) -> int:
         import tensorflow as tf
         from coppeliasim_zmqremoteapi_client import RemoteAPIClient
 
+        keyboard_hook = keyboard.hook(keyboard_state.handle_event)
         print(f"Startup 2/4: TensorFlow {tf.__version__} loaded. Loading CNN model...", flush=True)
         model = tf.keras.models.load_model(str(model_path), compile=False)
         validate_model_contract(model)
@@ -361,7 +395,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 break
 
-            before_label, left_velocity, right_velocity = get_human_command(keyboard)
+            before_label, left_velocity, right_velocity = human_command_from_held_keys(keyboard_state.snapshot())
             last_motor_command = apply_motor_command_if_changed(
                 sim, left_motor, right_motor,
                 left_velocity, right_velocity, last_motor_command
@@ -379,7 +413,7 @@ def main(argv: list[str] | None = None) -> int:
                 if not blank_frame_noted:
                     print("Waiting for the first non-blank camera frame...")
                     blank_frame_noted = True
-                _, left_velocity, right_velocity = get_human_command(keyboard)
+                _, left_velocity, right_velocity = human_command_from_held_keys(keyboard_state.snapshot())
                 last_motor_command = apply_motor_command_if_changed(
                     sim, left_motor, right_motor,
                     left_velocity, right_velocity, last_motor_command
@@ -395,7 +429,7 @@ def main(argv: list[str] | None = None) -> int:
             predicted_label = CLASS_NAMES[predicted_index]
             confidence = float(probabilities[predicted_index])
 
-            after_label, left_velocity, right_velocity = get_human_command(keyboard)
+            after_label, left_velocity, right_velocity = human_command_from_held_keys(keyboard_state.snapshot())
             last_motor_command = apply_motor_command_if_changed(
                 sim, left_motor, right_motor,
                 left_velocity, right_velocity, last_motor_command
@@ -482,6 +516,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"STEP 6A ERROR: {error}", file=sys.stderr)
         exit_status = 1
     finally:
+        if keyboard_hook is not None:
+            try:
+                keyboard.unhook(keyboard_hook)
+            except Exception as error:
+                print(
+                    f"STEP 6A CLEANUP ERROR: Could not remove keyboard hook: {error}",
+                    file=sys.stderr,
+                )
+                exit_status = 1
+
         if sim is not None and not stop_motors(sim, left_motor, right_motor):
             exit_status = 1
         if csv_file is not None:

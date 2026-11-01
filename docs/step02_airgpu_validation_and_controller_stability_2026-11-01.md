@@ -1,6 +1,6 @@
-# Step-2 AirGPU Validation and Controller-Stability Evidence
+﻿# Step-2 AirGPU Validation and Controller-Stability Evidence
 
-**Project:** Intelligent Robotics for Energy Infrastructure — Design Project
+**Project:** Intelligent Robotics for Energy Infrastructure â€” Design Project
 **Date:** 2026-11-01
 **Branch:** step-05-06-simplified-baseline
 
@@ -35,19 +35,19 @@ Microsoft Remote Desktop (RDP) provided the reliable interactive access path. Mo
 
 After the original Step-2 controller also caused CoppeliaSim to disappear on the AirGPU VM, three controlled tests were run.
 
-### Test A — simulation only
+### Test A â€” simulation only
 
 The maze simulation ran without the Python controller.
 
 **Result: PASS.**
 
-### Test B — idle ZMQ connection
+### Test B â€” idle ZMQ connection
 
 Python connected to CoppeliaSim, resolved the PioneerP3DX and both motor objects, and remained connected without issuing motor commands.
 
 **Result: PASS.**
 
-### Test C — one bounded movement
+### Test C â€” one bounded movement
 
 Python issued one forward wheel command, waited briefly, issued one stop command, then remained idle.
 
@@ -71,7 +71,7 @@ With that controller:
 - Traversal 2 completed the full maze;
 - no CoppeliaSim crash occurred.
 
-## Interpretation — cautious wording required
+## Interpretation â€” cautious wording required
 
 The evidence supports the following engineering conclusion:
 
@@ -111,8 +111,8 @@ The repository now adopts this rule:
 Applied scope:
 
 - Step 2: event-driven keyboard state plus state-change motor writes;
-- Step 4: continuous camera/data recording remains, but duplicate motor writes are suppressed;
-- Step 6 shadow/manual control: continuous inference/logging remains, but duplicate manual motor writes are suppressed.
+- Step 4: continuous camera/data recording remains, W/A/D state is maintained from keyboard events rather than repeated is_pressed polling, and duplicate motor writes are suppressed;
+- Step 6 shadow/manual control: continuous inference/logging remains, W/A/D state is maintained from keyboard events, and duplicate manual motor writes are suppressed.
 
 The calibrated Step-2/Step-4 motion profile itself is unchanged.
 
@@ -122,7 +122,7 @@ After implementing the controller changes:
 
 - git diff --check passed;
 - the project dependencies were installed into a temporary isolated Python 3.11 virtual environment;
-- the full automated suite passed: **19 passed**;
+- the initial state-change suite passed 19 tests; after extending event-driven keyboard-state handling to Steps 4 and 6, the full unittest suite passed **21/21 tests**;
 - the temporary test environment was removed afterward.
 
 The new regression tests specifically verify that repeated identical wheel commands do not generate repeated CoppeliaSim motor writes.
@@ -164,7 +164,7 @@ Before stopping the successful AirGPU session:
 
 No AirGPU runtime is required for the code/test/documentation stage that follows.
 
-## Local Lenovo follow-up — 2026-11-02
+## Local Lenovo follow-up â€” 2026-11-02
 
 The validated Step-2 controller was retested on the Lenovo using **CoppeliaSim Edu 4.9.0 rev6**, matching the successful AirGPU simulator build.
 
@@ -176,4 +176,5 @@ The validated Step-2 controller was retested on the Lenovo using **CoppeliaSim E
 Therefore the event-driven/state-change controller remains the validated workaround for the AirGPU failure mode, but it is **not sufficient to make the Lenovo simulator environment reliable**.
 
 Project decision: retain **AirGPU as the validated simulator environment** and avoid further repeated local CoppeliaSim retries during the core project. The detailed local evidence is recorded in `docs/lenovo_local_validation_failure_coppeliasim_490_2026-11-02.md`.
+
 

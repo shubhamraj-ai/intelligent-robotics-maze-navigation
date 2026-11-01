@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -58,9 +59,9 @@ def load_motion_profile(path: Path = MOTION_PROFILE_PATH) -> dict[str, float]:
     return values
 
 
-def get_command(keyboard_module, profile: dict[str, float]):
+def command_from_held_keys(held_keys, profile: dict[str, float]):
     """Return one stable W/A/D label and the matching calibrated wheel speeds."""
-    held = [key for key in ("w", "a", "d") if keyboard_module.is_pressed(key)]
+    held = [key for key in ("w", "a", "d") if key in held_keys]
     if len(held) != 1:
         return None, 0.0, 0.0
 
@@ -74,6 +75,36 @@ def get_command(keyboard_module, profile: dict[str, float]):
     if key == "a":
         return "left", inner, outer
     return "right", outer, inner
+
+
+def get_command(keyboard_module, profile: dict[str, float]):
+    """Compatibility helper for tests/tools that expose is_pressed()."""
+    held = {key for key in ("w", "a", "d") if keyboard_module.is_pressed(key)}
+    return command_from_held_keys(held, profile)
+
+
+class KeyboardState:
+    """Maintain W/A/D state from keyboard events without polling is_pressed()."""
+
+    def __init__(self):
+        self._held = set()
+        self._lock = threading.Lock()
+
+    def handle_event(self, event):
+        key = (getattr(event, "name", "") or "").lower()
+        if key not in {"w", "a", "d"}:
+            return
+
+        event_type = getattr(event, "event_type", "")
+        with self._lock:
+            if event_type == "down":
+                self._held.add(key)
+            elif event_type == "up":
+                self._held.discard(key)
+
+    def snapshot(self):
+        with self._lock:
+            return set(self._held)
 
 
 def apply_motor_command_if_changed(
@@ -156,6 +187,8 @@ def main():
     active_label = None
     active_since = None
     last_motor_command = None
+    keyboard_hook = None
+    keyboard_state = KeyboardState()
     exit_status = 0
     session_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
@@ -166,6 +199,7 @@ def main():
         from coppeliasim_zmqremoteapi_client import RemoteAPIClient
 
         profile = load_motion_profile()
+        keyboard_hook = keyboard.hook(keyboard_state.handle_event)
         print(f"Session ID: {session_id}")
         print(f"Motion profile: {MOTION_PROFILE_PATH}")
         print(
@@ -213,8 +247,8 @@ def main():
                     "Simulation is stopped or paused; start it in CoppeliaSim."
                 )
 
-            before_label, left_velocity, right_velocity = get_command(
-                keyboard, profile
+            before_label, left_velocity, right_velocity = command_from_held_keys(
+                keyboard_state.snapshot(), profile
             )
             last_motor_command = apply_motor_command_if_changed(
                 sim, left_motor, right_motor,
@@ -226,8 +260,8 @@ def main():
             cv2.imshow("PioneerP3DX Training Data", frame)
             cv2.waitKey(1)
 
-            after_label, left_velocity, right_velocity = get_command(
-                keyboard, profile
+            after_label, left_velocity, right_velocity = command_from_held_keys(
+                keyboard_state.snapshot(), profile
             )
             last_motor_command = apply_motor_command_if_changed(
                 sim, left_motor, right_motor,
@@ -286,6 +320,16 @@ def main():
         print(f"STEP 4 ERROR: {error}", file=sys.stderr)
         exit_status = 1
     finally:
+        if keyboard_hook is not None:
+            try:
+                keyboard.unhook(keyboard_hook)
+            except Exception as error:
+                print(
+                    f"STEP 4 CLEANUP ERROR: Could not remove keyboard hook: {error}",
+                    file=sys.stderr,
+                )
+                exit_status = 1
+
         if sim is not None:
             for motor in (left_motor, right_motor):
                 if motor is not None:
