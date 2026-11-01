@@ -1,7 +1,7 @@
 # Step-2 AirGPU Validation and Controller-Stability Evidence
 
-**Project:** Intelligent Robotics for Energy Infrastructure — Design Project  
-**Date:** 2026-11-01  
+**Project:** Intelligent Robotics for Energy Infrastructure — Design Project
+**Date:** 2026-11-01
 **Branch:** step-05-06-simplified-baseline
 
 ## Outcome
