@@ -26,6 +26,14 @@ class FakeKeyboard:
         return key in self.pressed
 
 
+class FakeSim:
+    def __init__(self):
+        self.calls = []
+
+    def setJointTargetVelocity(self, motor, velocity):
+        self.calls.append((motor, velocity))
+
+
 class ShadowInferenceTests(unittest.TestCase):
     def test_single_instance_guard_rejects_second_process(self):
         first = shadow.acquire_single_instance_guard(0)
@@ -60,6 +68,23 @@ class ShadowInferenceTests(unittest.TestCase):
             shadow.get_human_command(FakeKeyboard({"w", "a"})),
             (None, 0.0, 0.0),
         )
+
+    def test_motor_gate_suppresses_duplicate_writes(self):
+        sim = FakeSim()
+        previous = None
+        previous = shadow.apply_motor_command_if_changed(
+            sim, "left", "right", 2.0, 2.0, previous
+        )
+        previous = shadow.apply_motor_command_if_changed(
+            sim, "left", "right", 2.0, 2.0, previous
+        )
+        previous = shadow.apply_motor_command_if_changed(
+            sim, "left", "right", 0.0, 0.0, previous
+        )
+        self.assertEqual(sim.calls, [
+            ("left", 2.0), ("right", 2.0),
+            ("left", 0.0), ("right", 0.0),
+        ])
 
     def test_bottom_up_rgb_is_flipped_to_top_down(self):
         bottom_row = [10, 20, 30, 40, 50, 60]

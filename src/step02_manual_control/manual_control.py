@@ -3,6 +3,10 @@
 This Step-2 controller is deliberately minimal:
 - W drives both wheels forward.
 - A/D use forward-only differential wheel speeds to create curved turns.
+- Keyboard events update the requested motion state.
+- Motor commands are sent only when that requested state changes, avoiding
+  redundant high-frequency ZMQ writes associated with simulator instability
+  during validation.
 - The motion profile is shared with Step 4 so training-data collection uses
   exactly the same robot motion that is manually calibrated here.
 """
@@ -11,7 +15,6 @@ from __future__ import annotations
 
 import json
 import sys
-import time
 from pathlib import Path
 
 import keyboard
@@ -51,9 +54,9 @@ def load_motion_profile(path: Path = MOTION_PROFILE_PATH) -> dict[str, float]:
     return values
 
 
-def get_command(keyboard_module, profile: dict[str, float]):
-    """Return one unambiguous W/A/D command and its wheel velocities."""
-    held = [key for key in ("w", "a", "d") if keyboard_module.is_pressed(key)]
+def command_from_held_keys(held_keys, profile: dict[str, float]):
+    """Return one unambiguous W/A/D command from the current held-key set."""
+    held = [key for key in ("w", "a", "d") if key in held_keys]
     if len(held) != 1:
         return None, 0.0, 0.0
 
@@ -69,10 +72,33 @@ def get_command(keyboard_module, profile: dict[str, float]):
     return "right", outer, inner
 
 
+def get_command(keyboard_module, profile: dict[str, float]):
+    """Compatibility helper for tests/tools that expose is_pressed()."""
+    held = {key for key in ("w", "a", "d") if keyboard_module.is_pressed(key)}
+    return command_from_held_keys(held, profile)
+
+
+def apply_motor_command_if_changed(
+    sim,
+    left_motor,
+    right_motor,
+    left_velocity: float,
+    right_velocity: float,
+    previous_command,
+):
+    """Write wheel targets only when the requested pair changes."""
+    command = (float(left_velocity), float(right_velocity))
+    if command == previous_command:
+        return previous_command
+
+    sim.setJointTargetVelocity(left_motor, command[0])
+    sim.setJointTargetVelocity(right_motor, command[1])
+    return command
+
+
 def stop_motors(sim, left_motor, right_motor):
     """Try each motor independently so both receive a stop command."""
     cleanup_succeeded = True
-
     for motor in (left_motor, right_motor):
         if motor is None:
             continue
@@ -84,7 +110,6 @@ def stop_motors(sim, left_motor, right_motor):
                 f"STEP 2 CLEANUP ERROR: Could not stop a motor: {error}",
                 file=sys.stderr,
             )
-
     return cleanup_succeeded
 
 
@@ -94,11 +119,15 @@ def main():
     print("A - Curved left")
     print("D - Curved right")
     print("Release keys (or press multiple W/A/D keys) to stop.")
+    print("ESC - Stop motors and exit.")
+    print("Motor commands are sent only when the requested motion state changes.")
 
     sim = None
     left_motor = None
     right_motor = None
     exit_status = 0
+    held_keys = set()
+    last_motor_command = None
 
     try:
         profile = load_motion_profile()
@@ -110,8 +139,8 @@ def main():
             f"turn outer={profile['turn_outer_speed']:.2f}"
         )
         print(
-            "These are initial calibration values. "
-            "Manually validate the full maze before collecting new training data."
+            "These values passed two complete AirGPU full-maze traversals "
+            "using state-change/event-driven control."
         )
 
         try:
@@ -141,11 +170,37 @@ def main():
             elif object_path == "/PioneerP3DX/rightMotor":
                 right_motor = object_handle
 
+        last_motor_command = apply_motor_command_if_changed(
+            sim, left_motor, right_motor, 0.0, 0.0, last_motor_command
+        )
+
         while True:
-            _, left_velocity, right_velocity = get_command(keyboard, profile)
-            sim.setJointTargetVelocity(left_motor, left_velocity)
-            sim.setJointTargetVelocity(right_motor, right_velocity)
-            time.sleep(profile["control_interval_seconds"])
+            event = keyboard.read_event()
+            key = (event.name or "").lower()
+
+            if key == "esc" and event.event_type == keyboard.KEY_DOWN:
+                break
+            if key not in {"w", "a", "d"}:
+                continue
+
+            if event.event_type == keyboard.KEY_DOWN:
+                held_keys.add(key)
+            elif event.event_type == keyboard.KEY_UP:
+                held_keys.discard(key)
+            else:
+                continue
+
+            _, left_velocity, right_velocity = command_from_held_keys(
+                held_keys, profile
+            )
+            last_motor_command = apply_motor_command_if_changed(
+                sim,
+                left_motor,
+                right_motor,
+                left_velocity,
+                right_velocity,
+                last_motor_command,
+            )
     except KeyboardInterrupt:
         pass
     except Exception as error:

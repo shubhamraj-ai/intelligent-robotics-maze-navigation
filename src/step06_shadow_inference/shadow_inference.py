@@ -119,6 +119,23 @@ def get_human_command(keyboard_module):
     return "right", TURN_SPEED, -TURN_SPEED
 
 
+def apply_motor_command_if_changed(
+    sim,
+    left_motor,
+    right_motor,
+    left_velocity: float,
+    right_velocity: float,
+    previous_command,
+):
+    """Write wheel targets only when the requested pair changes."""
+    command = (float(left_velocity), float(right_velocity))
+    if command == previous_command:
+        return previous_command
+    sim.setJointTargetVelocity(left_motor, command[0])
+    sim.setJointTargetVelocity(right_motor, command[1])
+    return command
+
+
 def convert_raw_image_rgb(raw_image, resolution, np_module):
     """Validate CoppeliaSim's bottom-up RGB buffer and return top-down RGB."""
     if len(resolution) != 2:
@@ -238,6 +255,7 @@ def main(argv: list[str] | None = None) -> int:
     csv_file = None
     exit_status = 0
     metrics = ShadowMetrics()
+    last_motor_command = None
 
     run_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -344,8 +362,10 @@ def main(argv: list[str] | None = None) -> int:
                 break
 
             before_label, left_velocity, right_velocity = get_human_command(keyboard)
-            sim.setJointTargetVelocity(left_motor, left_velocity)
-            sim.setJointTargetVelocity(right_motor, right_velocity)
+            last_motor_command = apply_motor_command_if_changed(
+                sim, left_motor, right_motor,
+                left_velocity, right_velocity, last_motor_command
+            )
 
             raw_image, resolution = sim.getVisionSensorImg(handles[CAMERA_PATH])
             frame_rgb = convert_raw_image_rgb(raw_image, resolution, np)
@@ -360,8 +380,10 @@ def main(argv: list[str] | None = None) -> int:
                     print("Waiting for the first non-blank camera frame...")
                     blank_frame_noted = True
                 _, left_velocity, right_velocity = get_human_command(keyboard)
-                sim.setJointTargetVelocity(left_motor, left_velocity)
-                sim.setJointTargetVelocity(right_motor, right_velocity)
+                last_motor_command = apply_motor_command_if_changed(
+                    sim, left_motor, right_motor,
+                    left_velocity, right_velocity, last_motor_command
+                )
                 remaining = LOOP_INTERVAL_SECONDS - (time.monotonic() - loop_started)
                 if remaining > 0:
                     time.sleep(remaining)
@@ -374,8 +396,10 @@ def main(argv: list[str] | None = None) -> int:
             confidence = float(probabilities[predicted_index])
 
             after_label, left_velocity, right_velocity = get_human_command(keyboard)
-            sim.setJointTargetVelocity(left_motor, left_velocity)
-            sim.setJointTargetVelocity(right_motor, right_velocity)
+            last_motor_command = apply_motor_command_if_changed(
+                sim, left_motor, right_motor,
+                left_velocity, right_velocity, last_motor_command
+            )
 
             scored_label = (
                 before_label

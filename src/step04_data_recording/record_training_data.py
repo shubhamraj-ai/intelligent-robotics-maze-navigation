@@ -76,6 +76,23 @@ def get_command(keyboard_module, profile: dict[str, float]):
     return "right", outer, inner
 
 
+def apply_motor_command_if_changed(
+    sim,
+    left_motor,
+    right_motor,
+    left_velocity: float,
+    right_velocity: float,
+    previous_command,
+):
+    """Write wheel targets only when the requested pair changes."""
+    command = (float(left_velocity), float(right_velocity))
+    if command == previous_command:
+        return previous_command
+    sim.setJointTargetVelocity(left_motor, command[0])
+    sim.setJointTargetVelocity(right_motor, command[1])
+    return command
+
+
 def save_interval_for(label: str) -> float:
     """Subsample long forward runs more strongly than shorter turn states."""
     if label == "forward":
@@ -138,6 +155,7 @@ def main():
     last_save_time = {label: None for label in counters}
     active_label = None
     active_since = None
+    last_motor_command = None
     exit_status = 0
     session_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
@@ -198,8 +216,10 @@ def main():
             before_label, left_velocity, right_velocity = get_command(
                 keyboard, profile
             )
-            sim.setJointTargetVelocity(left_motor, left_velocity)
-            sim.setJointTargetVelocity(right_motor, right_velocity)
+            last_motor_command = apply_motor_command_if_changed(
+                sim, left_motor, right_motor,
+                left_velocity, right_velocity, last_motor_command
+            )
 
             raw_image, resolution = sim.getVisionSensorImg(handles[CAMERA_PATH])
             frame = convert_image(raw_image, resolution, np, cv2)
@@ -209,8 +229,10 @@ def main():
             after_label, left_velocity, right_velocity = get_command(
                 keyboard, profile
             )
-            sim.setJointTargetVelocity(left_motor, left_velocity)
-            sim.setJointTargetVelocity(right_motor, right_velocity)
+            last_motor_command = apply_motor_command_if_changed(
+                sim, left_motor, right_motor,
+                left_velocity, right_velocity, last_motor_command
+            )
 
             now = time.monotonic()
             stable_label = (

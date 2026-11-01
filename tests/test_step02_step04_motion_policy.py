@@ -27,6 +27,14 @@ class FakeKeyboard:
         return key in self.pressed
 
 
+class FakeSim:
+    def __init__(self):
+        self.calls = []
+
+    def setJointTargetVelocity(self, motor, velocity):
+        self.calls.append((motor, velocity))
+
+
 class ProfessorAlignedMotionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -62,6 +70,44 @@ class ProfessorAlignedMotionTests(unittest.TestCase):
             step2.get_command(FakeKeyboard("w", "a"), self.profile),
             (None, 0.0, 0.0),
         )
+
+    def test_step2_command_from_held_keys_matches_mapping(self):
+        self.assertEqual(
+            step2.command_from_held_keys({"w"}, self.profile),
+            ("forward", self.profile["forward_speed"], self.profile["forward_speed"]),
+        )
+        self.assertEqual(
+            step2.command_from_held_keys({"w", "a"}, self.profile),
+            (None, 0.0, 0.0),
+        )
+
+    def test_step2_motor_gate_suppresses_duplicate_writes(self):
+        sim = FakeSim()
+        previous = None
+        previous = step2.apply_motor_command_if_changed(
+            sim, "left", "right", 1.0, 1.0, previous
+        )
+        previous = step2.apply_motor_command_if_changed(
+            sim, "left", "right", 1.0, 1.0, previous
+        )
+        previous = step2.apply_motor_command_if_changed(
+            sim, "left", "right", 0.0, 0.0, previous
+        )
+        self.assertEqual(sim.calls, [
+            ("left", 1.0), ("right", 1.0),
+            ("left", 0.0), ("right", 0.0),
+        ])
+
+    def test_step4_motor_gate_suppresses_duplicate_writes(self):
+        sim = FakeSim()
+        previous = None
+        previous = step4.apply_motor_command_if_changed(
+            sim, "left", "right", 0.1, 1.0, previous
+        )
+        previous = step4.apply_motor_command_if_changed(
+            sim, "left", "right", 0.1, 1.0, previous
+        )
+        self.assertEqual(sim.calls, [("left", 0.1), ("right", 1.0)])
 
     def test_step4_subsamples_forward_more_than_turns(self):
         self.assertGreater(
