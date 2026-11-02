@@ -35,21 +35,6 @@ class FakeSim:
         self.calls.append((motor, velocity))
 
 
-class FakeSimIM:
-    def __init__(self):
-        self.calls = []
-
-    def readFromVisionSensor(self, camera_handle):
-        self.calls.append(("read", camera_handle))
-        return "image-handle"
-
-    def write(self, image_handle, filename):
-        self.calls.append(("write", image_handle, filename))
-
-    def destroy(self, image_handle):
-        self.calls.append(("destroy", image_handle))
-
-
 class ProfessorAlignedMotionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -131,38 +116,33 @@ class ProfessorAlignedMotionTests(unittest.TestCase):
         )
         self.assertEqual(sim.calls, [("left", 0.1), ("right", 1.0)])
 
-    def test_step4_uses_uniform_low_rate_capture(self):
-        self.assertEqual(
-            step4.save_interval_for("forward"),
-            step4.save_interval_for("left"),
-        )
-        self.assertEqual(
-            step4.save_interval_for("left"),
-            step4.save_interval_for("right"),
-        )
-        self.assertEqual(step4.save_interval_for("forward"), 2.00)
-
-    def test_step4_has_nonzero_command_stability_delay(self):
+    def test_step4_capture_policy_is_conservative(self):
+        self.assertEqual(step4.SAVE_INTERVAL_SECONDS, 2.00)
         self.assertGreater(step4.MIN_STABLE_COMMAND_SECONDS, 0)
 
-
-    def test_step4_simim_capture_never_returns_pixel_buffer(self):
-        sim_im = FakeSimIM()
-        path = ROOT / "test-frame.jpg"
-        step4.write_sensor_image_with_simim(sim_im, 42, path)
-        self.assertEqual(
-            sim_im.calls,
-            [
-                ("read", 42),
-                ("write", "image-handle", str(path)),
-                ("destroy", "image-handle"),
-            ],
-        )
-
-    def test_step4_has_no_raw_vision_sensor_image_rpc(self):
+    def test_step4_python_never_touches_camera_or_image_api(self):
         source = Path(step4.__file__).read_text(encoding="utf-8")
         self.assertNotIn("getVisionSensorImg", source)
-        self.assertIn('client.require("simIM")', source)
+        self.assertNotIn('require("simIM")', source)
+        self.assertNotIn("/PioneerP3DX/cam1", source)
+        self.assertIn("setStringSignal", source)
+        self.assertIn("createScript", source)
+
+    def test_step4_lua_owns_camera_capture_and_save(self):
+        lua = (ROOT / "src" / "step04_data_recording" / "capture_in_scene.lua").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("/PioneerP3DX/cam1", lua)
+        self.assertIn("sim.getVisionSensorImg", lua)
+        self.assertIn("sim.saveImage", lua)
+        self.assertIn("sysCall_sensing", lua)
+        self.assertNotIn("simIM", lua)
+
+    def test_step4_has_stationary_capture_probe(self):
+        source = Path(step4.__file__).read_text(encoding="utf-8")
+        self.assertIn("run_stationary_capture_probe", source)
+        self.assertIn("INTERNAL_CAPTURE_PROBE_PASS", source)
+        self.assertIn("READY_TO_DRIVE", source)
 
 
 if __name__ == "__main__":

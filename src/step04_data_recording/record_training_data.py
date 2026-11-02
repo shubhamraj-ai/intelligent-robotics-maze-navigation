@@ -1,15 +1,15 @@
-"""Record W/A/D-labelled camera images using synchronized CoppeliaSim stepping.
+"""Step 4 recorder with all vision acquisition executed inside CoppeliaSim.
 
-Stability-focused Step-4 design:
-- uses exactly the same professor-aligned motion profile as Step 2;
-- keyboard events update requested motion state without is_pressed() polling;
-- motor commands are sent only when requested state changes;
-- this recorder owns CoppeliaSim stepping mode and advances one step at a time;
-- image capture is deliberately sparse (0.5 Hz) and begins only after a stable
-  command has been held for 0.75 seconds;
-- camera pixels never cross the ZeroMQ boundary: the simIM plugin reads the
-  vision sensor and writes JPEGs inside the CoppeliaSim process;
-- live OpenCV preview is disabled.
+Python responsibilities are deliberately restricted to:
+- W/A/D event handling;
+- professor-aligned state-change-only motor commands;
+- tiny string signals describing the current class label;
+- synchronized simulation stepping.
+
+Python never resolves the camera object, reads camera pixels, calls simIM, or
+writes image buffers.  A temporary Lua simulation script, created before the
+run and removed afterwards, performs vision-sensor reads and JPEG writes inside
+CoppeliaSim itself.
 """
 
 from __future__ import annotations
@@ -25,17 +25,19 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MOTION_PROFILE_PATH = REPO_ROOT / "config" / "motion_profile.json"
 DATASET_PATH = REPO_ROOT / "dataset_simplified"
-CAMERA_PATH = "/PioneerP3DX/cam1"
+CAPTURE_SCRIPT_PATH = Path(__file__).with_name("capture_in_scene.lua")
+
+CAPTURE_LABEL_SIGNAL = "step4_capture_label"
+DATASET_ROOT_SIGNAL = "step4_dataset_root"
+SESSION_ID_SIGNAL = "step4_session_id"
 
 MIN_STABLE_COMMAND_SECONDS = 0.75
-FORWARD_SAVE_INTERVAL_SECONDS = 2.00
-TURN_SAVE_INTERVAL_SECONDS = 2.00
+SAVE_INTERVAL_SECONDS = 2.00
 
 
 def load_motion_profile(path: Path = MOTION_PROFILE_PATH) -> dict[str, float]:
-    """Load the same motion profile manually calibrated in Step 2."""
+    """Load the same manually calibrated motion profile used by Step 2."""
     profile = json.loads(path.read_text(encoding="utf-8"))
-
     required = {
         "forward_speed",
         "turn_outer_speed",
@@ -57,12 +59,11 @@ def load_motion_profile(path: Path = MOTION_PROFILE_PATH) -> dict[str, float]:
         raise ValueError("turn_inner_speed must be lower than turn_outer_speed")
     if values["control_interval_seconds"] <= 0:
         raise ValueError("control_interval_seconds must be > 0")
-
     return values
 
 
 def command_from_held_keys(held_keys, profile: dict[str, float]):
-    """Return one stable W/A/D label and the matching calibrated wheel speeds."""
+    """Return one W/A/D label and matching calibrated wheel speeds."""
     held = [key for key in ("w", "a", "d") if key in held_keys]
     if len(held) != 1:
         return None, 0.0, 0.0
@@ -80,13 +81,13 @@ def command_from_held_keys(held_keys, profile: dict[str, float]):
 
 
 def get_command(keyboard_module, profile: dict[str, float]):
-    """Compatibility helper for tests/tools that expose is_pressed()."""
+    """Compatibility helper used by tests/tools exposing is_pressed()."""
     held = {key for key in ("w", "a", "d") if keyboard_module.is_pressed(key)}
     return command_from_held_keys(held, profile)
 
 
 class KeyboardState:
-    """Maintain W/A/D state from keyboard events without polling is_pressed()."""
+    """Maintain W/A/D state from events instead of repeated polling."""
 
     def __init__(self):
         self._held = set()
@@ -96,7 +97,6 @@ class KeyboardState:
         key = (getattr(event, "name", "") or "").lower()
         if key not in {"w", "a", "d"}:
             return
-
         event_type = getattr(event, "event_type", "")
         with self._lock:
             if event_type == "down":
@@ -121,36 +121,78 @@ def apply_motor_command_if_changed(
     command = (float(left_velocity), float(right_velocity))
     if command == previous_command:
         return previous_command
-
     sim.setJointTargetVelocity(left_motor, command[0])
     sim.setJointTargetVelocity(right_motor, command[1])
     return command
 
 
-def save_interval_for(label: str) -> float:
-    """Return the deliberately low capture interval for each class."""
-    if label == "forward":
-        return FORWARD_SAVE_INTERVAL_SECONDS
-    if label in ("left", "right"):
-        return TURN_SAVE_INTERVAL_SECONDS
-    raise ValueError(f"Unknown label: {label}")
+def set_capture_label_if_changed(sim, label, previous_label):
+    """Publish only small state-change labels to the in-scene capture script."""
+    normalized = label or ""
+    if normalized == previous_label:
+        return previous_label
+    sim.setStringSignal(CAPTURE_LABEL_SIGNAL, normalized)
+    return normalized
 
 
-def write_sensor_image_with_simim(sim_im, camera_handle, image_path: Path) -> None:
-    """Save a vision-sensor frame without transferring pixel data over ZeroMQ."""
-    image_handle = None
+def install_internal_capture_script(sim, script_path: Path = CAPTURE_SCRIPT_PATH):
+    """Create a temporary Lua simulation script while the simulation is stopped."""
+    script_text = script_path.read_text(encoding="utf-8")
+    if not script_text.strip():
+        raise RuntimeError(f"Capture script is empty: {script_path}")
+    script_handle = sim.createScript(
+        sim.scripttype_simulation,
+        script_text,
+        0,
+        "lua",
+    )
+    if script_handle < 0:
+        raise RuntimeError("CoppeliaSim could not create the capture script")
     try:
-        image_handle = sim_im.readFromVisionSensor(camera_handle)
-        if not image_handle:
-            raise RuntimeError("simIM returned an invalid image handle")
-        sim_im.write(image_handle, str(image_path))
-    finally:
-        if image_handle:
-            sim_im.destroy(image_handle)
+        sim.setObjectAlias(script_handle, "Step4InternalCapture")
+    except Exception:
+        # Alias is diagnostic only; capture does not depend on it.
+        pass
+    return script_handle
+
+
+def prepare_dataset() -> None:
+    """Create only the directories required by this session."""
+    for label in ("forward", "left", "right", "_probe"):
+        (DATASET_PATH / label).mkdir(parents=True, exist_ok=True)
+
+
+def count_session_images(session_id: str) -> dict[str, int]:
+    """Count images produced by the in-scene script for this session."""
+    return {
+        label: len(list((DATASET_PATH / label).glob(f"{session_id}_{label}_*.jpg")))
+        for label in ("forward", "left", "right")
+    }
+
+
+def run_stationary_capture_probe(sim, session_id: str) -> None:
+    """Prove one in-scene image can be saved before any wheel motion occurs."""
+    probe_dir = DATASET_PATH / "_probe"
+    before = set(probe_dir.glob(f"{session_id}_probe_*.jpg"))
+
+    sim.setStringSignal(CAPTURE_LABEL_SIGNAL, "probe")
+    probe_start = sim.getSimulationTime()
+    target = MIN_STABLE_COMMAND_SECONDS + 0.35
+
+    while sim.getSimulationTime() - probe_start < target:
+        sim.step()
+
+    sim.setStringSignal(CAPTURE_LABEL_SIGNAL, "")
+    sim.step()
+
+    after = set(probe_dir.glob(f"{session_id}_probe_*.jpg"))
+    if len(after - before) < 1:
+        raise RuntimeError(
+            "Internal stationary capture probe produced no JPEG. Do not drive."
+        )
 
 
 def print_distribution(counters: dict[str, int]) -> None:
-    """Print session distribution so imbalance is visible immediately."""
     total = sum(counters.values())
     print("Saved images: " + ", ".join(f"{k}={v}" for k, v in counters.items()))
     if not total:
@@ -164,32 +206,29 @@ def print_distribution(counters: dict[str, int]) -> None:
     if max(shares.values()) > 0.70:
         print(
             "STEP 4 DATA WARNING: One class exceeds 70% of this session. "
-            "Before Step 5, collect additional clean examples for the "
-            "underrepresented classes instead of relying immediately on "
-            "strong class weighting."
+            "Collect additional clean examples for underrepresented classes "
+            "before Step 5."
         )
 
 
 def main():
-    print("STEP 4 - Synchronized Training Data Recording")
+    print("STEP 4 - In-scene Training Data Recording")
     print("W - Forward; A - Curved left; D - Curved right.")
     print("Release keys (or press multiple W/A/D keys) to stop.")
-    print("IMPORTANT: Open the maze but leave CoppeliaSim SIMULATION STOPPED.")
-    print("This recorder starts/stops the simulation and owns stepping mode.")
-    print("Use terminal Ctrl+C to exit.")
+    print("IMPORTANT: Open the maze and leave SIMULATION STOPPED.")
+    print("Python does not access the camera in this build.")
+    print("Use terminal Ctrl+C to finish.")
 
     sim = None
+    capture_script_handle = None
     left_motor = None
     right_motor = None
-    counters = {"forward": 0, "left": 0, "right": 0}
-    last_save_time = {label: None for label in counters}
-    active_label = None
-    active_since = None
     last_motor_command = None
+    last_capture_label = None
     keyboard_hook = None
     keyboard_state = KeyboardState()
     exit_status = 0
-    simulation_started_by_recorder = False
+    simulation_started = False
     stepping_enabled = False
     session_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
@@ -199,6 +238,7 @@ def main():
 
         profile = load_motion_profile()
         keyboard_hook = keyboard.hook(keyboard_state.handle_event)
+        prepare_dataset()
 
         print(f"Session ID: {session_id}")
         print(f"Motion profile: {MOTION_PROFILE_PATH}")
@@ -209,68 +249,58 @@ def main():
             f"turn outer={profile['turn_outer_speed']:.2f}"
         )
         print(
-            "Recording policy: "
+            "Capture policy: handled entirely by temporary Lua simulation script; "
             f"stable command >= {MIN_STABLE_COMMAND_SECONDS:.2f}s; "
-            f"forward every {FORWARD_SAVE_INTERVAL_SECONDS:.2f}s; "
-            f"turn every {TURN_SAVE_INTERVAL_SECONDS:.2f}s."
-        )
-        print(
-            "Stability policy: synchronized stepping; state-change-only motor "
-            "writes; 0.5 Hz simIM in-process image saves; no pixel buffers over ZMQ."
+            f"one frame every {SAVE_INTERVAL_SECONDS:.2f}s."
         )
 
         client = RemoteAPIClient()
         sim = client.require("sim")
-        sim_im = client.require("simIM")
-        print("SIMIM_PLUGIN_READY")
 
-        handles = {}
-        for path in (
-            "/PioneerP3DX",
-            "/PioneerP3DX/leftMotor",
-            "/PioneerP3DX/rightMotor",
-            CAMERA_PATH,
-        ):
-            handle = sim.getObject(path)
-            if handle < 0:
-                raise RuntimeError(f"Could not resolve scene object {path}")
-            handles[path] = handle
-            if path == "/PioneerP3DX/leftMotor":
-                left_motor = handle
-            elif path == "/PioneerP3DX/rightMotor":
-                right_motor = handle
+        robot = sim.getObject("/PioneerP3DX")
+        left_motor = sim.getObject("/PioneerP3DX/leftMotor")
+        right_motor = sim.getObject("/PioneerP3DX/rightMotor")
+        if min(robot, left_motor, right_motor) < 0:
+            raise RuntimeError("Could not resolve PioneerP3DX motor objects")
 
-        for label in counters:
-            (DATASET_PATH / label).mkdir(parents=True, exist_ok=True)
-
-        state = sim.getSimulationState()
-        if state != sim.simulation_stopped:
+        if sim.getSimulationState() != sim.simulation_stopped:
             raise RuntimeError(
-                "Simulation is already running/paused. Stop it in CoppeliaSim "
-                "before launching this synchronized recorder."
+                "Simulation is already running/paused. Stop it before launching "
+                "this recorder."
             )
+
+        capture_script_handle = install_internal_capture_script(sim)
+        print("INTERNAL_CAPTURE_SCRIPT_INSTALLED")
 
         sim.setStepping(True)
         stepping_enabled = True
         sim.startSimulation()
-        simulation_started_by_recorder = True
+        simulation_started = True
 
-        # Warm up several deterministic simulation steps before accepting data.
+        # Signals are set after start because simulation start clears signals.
+        sim.setStringSignal(DATASET_ROOT_SIGNAL, DATASET_PATH.as_posix())
+        sim.setStringSignal(SESSION_ID_SIGNAL, session_id)
+        last_capture_label = set_capture_label_if_changed(sim, None, None)
+
         last_motor_command = apply_motor_command_if_changed(
             sim, left_motor, right_motor, 0.0, 0.0, last_motor_command
         )
+
         for _ in range(4):
             sim.step()
 
-        print("SYNCHRONIZED_SIMULATION_RUNNING")
+        print("RUNNING_STATIONARY_INTERNAL_CAPTURE_PROBE")
+        run_stationary_capture_probe(sim, session_id)
+        print("INTERNAL_CAPTURE_PROBE_PASS")
+        print("READY_TO_DRIVE")
 
         while True:
             loop_started = time.monotonic()
 
-            held_snapshot = keyboard_state.snapshot()
             current_label, left_velocity, right_velocity = command_from_held_keys(
-                held_snapshot, profile
+                keyboard_state.snapshot(), profile
             )
+
             last_motor_command = apply_motor_command_if_changed(
                 sim,
                 left_motor,
@@ -279,65 +309,11 @@ def main():
                 right_velocity,
                 last_motor_command,
             )
+            last_capture_label = set_capture_label_if_changed(
+                sim, current_label, last_capture_label
+            )
 
-            # Advance exactly one simulator step, then (only if due) retrieve
-            # the image generated by that synchronized step.
             sim.step()
-            now = time.monotonic()
-
-            if current_label is None:
-                active_label = None
-                active_since = None
-            else:
-                if current_label != active_label:
-                    active_label = current_label
-                    active_since = now
-                elif (
-                    active_since is not None
-                    and now - active_since >= MIN_STABLE_COMMAND_SECONDS
-                ):
-                    interval = save_interval_for(current_label)
-                    last_saved = last_save_time[current_label]
-
-                    if last_saved is None or now - last_saved >= interval:
-                        capture_label = current_label
-                        before_label, _, _ = command_from_held_keys(
-                            keyboard_state.snapshot(), profile
-                        )
-
-                        if before_label == capture_label:
-                            timestamp = datetime.now(timezone.utc).strftime(
-                                "%Y%m%dT%H%M%S%fZ"
-                            )
-                            counter = counters[capture_label] + 1
-                            filename = (
-                                f"{session_id}_{capture_label}_{timestamp}_"
-                                f"{counter:06d}.jpg"
-                            )
-                            image_path = DATASET_PATH / capture_label / filename
-
-                            while image_path.exists():
-                                counter += 1
-                                filename = (
-                                    f"{session_id}_{capture_label}_{timestamp}_"
-                                    f"{counter:06d}.jpg"
-                                )
-                                image_path = DATASET_PATH / capture_label / filename
-
-                            write_sensor_image_with_simim(
-                                sim_im,
-                                handles[CAMERA_PATH],
-                                image_path,
-                            )
-
-                            after_label, _, _ = command_from_held_keys(
-                                keyboard_state.snapshot(), profile
-                            )
-                            if after_label == capture_label:
-                                counters[capture_label] += 1
-                                last_save_time[capture_label] = time.monotonic()
-                            else:
-                                image_path.unlink(missing_ok=True)
 
             remaining = (
                 profile["control_interval_seconds"]
@@ -356,13 +332,15 @@ def main():
             try:
                 keyboard.unhook(keyboard_hook)
             except Exception as error:
-                print(
-                    f"STEP 4 CLEANUP ERROR: Could not remove keyboard hook: {error}",
-                    file=sys.stderr,
-                )
+                print(f"STEP 4 CLEANUP ERROR: keyboard hook: {error}", file=sys.stderr)
                 exit_status = 1
 
         if sim is not None:
+            try:
+                sim.setStringSignal(CAPTURE_LABEL_SIGNAL, "")
+            except Exception:
+                pass
+
             try:
                 if left_motor is not None and right_motor is not None:
                     last_motor_command = apply_motor_command_if_changed(
@@ -373,21 +351,23 @@ def main():
                         0.0,
                         last_motor_command,
                     )
-                    if simulation_started_by_recorder:
+                    if simulation_started:
                         sim.step()
             except Exception as error:
-                print(
-                    f"STEP 4 CLEANUP ERROR: Could not stop motors cleanly: {error}",
-                    file=sys.stderr,
-                )
+                print(f"STEP 4 CLEANUP ERROR: motor stop: {error}", file=sys.stderr)
                 exit_status = 1
 
-            if simulation_started_by_recorder:
+            if simulation_started:
                 try:
                     sim.stopSimulation()
+                    # Give CoppeliaSim a few remote cycles to reach stopped state.
+                    for _ in range(30):
+                        if sim.getSimulationState() == sim.simulation_stopped:
+                            break
+                        time.sleep(0.05)
                 except Exception as error:
                     print(
-                        f"STEP 4 CLEANUP ERROR: Could not stop simulation: {error}",
+                        f"STEP 4 CLEANUP ERROR: stop simulation: {error}",
                         file=sys.stderr,
                     )
                     exit_status = 1
@@ -395,15 +375,20 @@ def main():
             if stepping_enabled:
                 try:
                     sim.setStepping(False)
+                except Exception:
+                    pass
+
+            if capture_script_handle is not None:
+                try:
+                    sim.removeObjects([capture_script_handle])
                 except Exception as error:
                     print(
-                        f"STEP 4 CLEANUP ERROR: Could not disable stepping: {error}",
+                        f"STEP 4 CLEANUP WARNING: temporary script not removed: {error}",
                         file=sys.stderr,
                     )
-                    exit_status = 1
 
         print(f"Session ID: {session_id}")
-        print_distribution(counters)
+        print_distribution(count_session_images(session_id))
 
     return exit_status
 
