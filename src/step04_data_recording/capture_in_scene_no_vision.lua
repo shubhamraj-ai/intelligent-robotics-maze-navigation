@@ -45,7 +45,7 @@ function sysCall_sensing()
     end
 
     -- Deliberately empty diagnostic boundary:
-    -- no sim.getObject('/PioneerP3DX/cam1')
-    -- no sim.getVisionSensorImg(...)
-    -- no sim.saveImage(...)
+    -- no camera-object lookup
+    -- no vision-sensor image read
+    -- no image/JPEG save
 end
