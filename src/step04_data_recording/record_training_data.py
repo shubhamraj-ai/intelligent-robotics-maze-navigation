@@ -15,6 +15,7 @@ CoppeliaSim itself.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import threading
 import time
@@ -25,7 +26,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MOTION_PROFILE_PATH = REPO_ROOT / "config" / "motion_profile.json"
 DATASET_PATH = REPO_ROOT / "dataset_simplified"
-CAPTURE_SCRIPT_PATH = Path(__file__).with_name("capture_in_scene.lua")
+DIAGNOSTIC_NO_VISION = os.environ.get("STEP4_NO_VISION_DIAGNOSTIC") == "1"
+CAPTURE_SCRIPT_PATH = Path(__file__).with_name(
+    "capture_in_scene_no_vision.lua" if DIAGNOSTIC_NO_VISION else "capture_in_scene.lua"
+)
 
 CAPTURE_LABEL_SIGNAL = "step4_capture_label"
 DATASET_ROOT_SIGNAL = "step4_dataset_root"
@@ -217,6 +221,9 @@ def main():
     print("Release keys (or press multiple W/A/D keys) to stop.")
     print("IMPORTANT: Open the maze and leave SIMULATION STOPPED.")
     print("Python does not access the camera in this build.")
+    if DIAGNOSTIC_NO_VISION:
+        print("DIAGNOSTIC MODE: Lua vision read/save is DISABLED.")
+        print("DIAGNOSTIC MODE: No training images will be created.")
     print("Use terminal Ctrl+C to finish.")
 
     sim = None
@@ -248,11 +255,17 @@ def main():
             f"turn inner={profile['turn_inner_speed']:.2f}, "
             f"turn outer={profile['turn_outer_speed']:.2f}"
         )
-        print(
-            "Capture policy: handled entirely by temporary Lua simulation script; "
-            f"stable command >= {MIN_STABLE_COMMAND_SECONDS:.2f}s; "
-            f"one frame every {SAVE_INTERVAL_SECONDS:.2f}s."
-        )
+        if DIAGNOSTIC_NO_VISION:
+            print(
+                "Diagnostic policy: same temporary Lua sensing-script lifecycle, "
+                "same labels/stepping/motion; vision read and image save disabled."
+            )
+        else:
+            print(
+                "Capture policy: handled entirely by temporary Lua simulation script; "
+                f"stable command >= {MIN_STABLE_COMMAND_SECONDS:.2f}s; "
+                f"one frame every {SAVE_INTERVAL_SECONDS:.2f}s."
+            )
 
         client = RemoteAPIClient()
         sim = client.require("sim")
@@ -289,10 +302,22 @@ def main():
         for _ in range(4):
             sim.step()
 
-        print("RUNNING_STATIONARY_INTERNAL_CAPTURE_PROBE")
-        run_stationary_capture_probe(sim, session_id)
-        print("INTERNAL_CAPTURE_PROBE_PASS")
-        print("READY_TO_DRIVE")
+        if DIAGNOSTIC_NO_VISION:
+            print("RUNNING_NO_VISION_STEPPING_PROBE")
+            probe_start = sim.getSimulationTime()
+            target = MIN_STABLE_COMMAND_SECONDS + 0.35
+            sim.setStringSignal(CAPTURE_LABEL_SIGNAL, "probe")
+            while sim.getSimulationTime() - probe_start < target:
+                sim.step()
+            sim.setStringSignal(CAPTURE_LABEL_SIGNAL, "")
+            sim.step()
+            print("NO_VISION_STEPPING_PROBE_PASS")
+            print("READY_TO_DRIVE_NO_VISION_DIAGNOSTIC")
+        else:
+            print("RUNNING_STATIONARY_INTERNAL_CAPTURE_PROBE")
+            run_stationary_capture_probe(sim, session_id)
+            print("INTERNAL_CAPTURE_PROBE_PASS")
+            print("READY_TO_DRIVE")
 
         while True:
             loop_started = time.monotonic()
