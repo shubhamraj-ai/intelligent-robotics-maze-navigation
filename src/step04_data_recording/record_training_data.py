@@ -7,8 +7,8 @@ Stability-focused Step-4 design:
 - this recorder owns CoppeliaSim stepping mode and advances one step at a time;
 - image capture is deliberately sparse (0.5 Hz) and begins only after a stable
   command has been held for 0.75 seconds;
-- images are transferred as greyscale to reduce ZMQ buffer size, then expanded
-  back to 3-channel BGR before JPEG saving for downstream compatibility;
+- camera pixels never cross the ZeroMQ boundary: the simIM plugin reads the
+  vision sensor and writes JPEGs inside the CoppeliaSim process;
 - live OpenCV preview is disabled.
 """
 
@@ -30,7 +30,6 @@ CAMERA_PATH = "/PioneerP3DX/cam1"
 MIN_STABLE_COMMAND_SECONDS = 0.75
 FORWARD_SAVE_INTERVAL_SECONDS = 2.00
 TURN_SAVE_INTERVAL_SECONDS = 2.00
-VISION_IMAGE_OPTIONS = 1  # bit0: request greyscale image from CoppeliaSim
 
 
 def load_motion_profile(path: Path = MOTION_PROFILE_PATH) -> dict[str, float]:
@@ -137,28 +136,17 @@ def save_interval_for(label: str) -> float:
     raise ValueError(f"Unknown label: {label}")
 
 
-def convert_greyscale_image(raw_image, resolution, np_module, cv2_module):
-    """Validate a greyscale sensor buffer and expand it to 3-channel BGR."""
-    if len(resolution) != 2:
-        raise ValueError(f"Expected [width, height], received {resolution}")
-
-    width, height = resolution
-    if not all(isinstance(value, int) and value > 0 for value in resolution):
-        raise ValueError(
-            f"Camera resolution must contain positive integers: {resolution}"
-        )
-
-    expected_bytes = width * height
-    if len(raw_image) != expected_bytes:
-        raise ValueError(
-            f"Expected {expected_bytes} greyscale bytes, received {len(raw_image)}"
-        )
-
-    frame_gray = np_module.frombuffer(
-        raw_image, dtype=np_module.uint8
-    ).reshape(height, width)
-    frame_gray = cv2_module.flip(frame_gray, 0)
-    return cv2_module.cvtColor(frame_gray, cv2_module.COLOR_GRAY2BGR)
+def write_sensor_image_with_simim(sim_im, camera_handle, image_path: Path) -> None:
+    """Save a vision-sensor frame without transferring pixel data over ZeroMQ."""
+    image_handle = None
+    try:
+        image_handle = sim_im.readFromVisionSensor(camera_handle)
+        if not image_handle:
+            raise RuntimeError("simIM returned an invalid image handle")
+        sim_im.write(image_handle, str(image_path))
+    finally:
+        if image_handle:
+            sim_im.destroy(image_handle)
 
 
 def print_distribution(counters: dict[str, int]) -> None:
@@ -191,7 +179,6 @@ def main():
     print("Use terminal Ctrl+C to exit.")
 
     sim = None
-    cv2 = None
     left_motor = None
     right_motor = None
     counters = {"forward": 0, "left": 0, "right": 0}
@@ -207,9 +194,7 @@ def main():
     session_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
     try:
-        import cv2
         import keyboard
-        import numpy as np
         from coppeliasim_zmqremoteapi_client import RemoteAPIClient
 
         profile = load_motion_profile()
@@ -231,11 +216,13 @@ def main():
         )
         print(
             "Stability policy: synchronized stepping; state-change-only motor "
-            "writes; 0.5 Hz greyscale camera transfer; no live preview."
+            "writes; 0.5 Hz simIM in-process image saves; no pixel buffers over ZMQ."
         )
 
         client = RemoteAPIClient()
         sim = client.require("sim")
+        sim_im = client.require("simIM")
+        print("SIMIM_PLUGIN_READY")
 
         handles = {}
         for path in (
@@ -314,18 +301,11 @@ def main():
 
                     if last_saved is None or now - last_saved >= interval:
                         capture_label = current_label
-                        raw_image, resolution = sim.getVisionSensorImg(
-                            handles[CAMERA_PATH],
-                            VISION_IMAGE_OPTIONS,
-                        )
-                        after_label, _, _ = command_from_held_keys(
+                        before_label, _, _ = command_from_held_keys(
                             keyboard_state.snapshot(), profile
                         )
 
-                        if after_label == capture_label:
-                            frame = convert_greyscale_image(
-                                raw_image, resolution, np, cv2
-                            )
+                        if before_label == capture_label:
                             timestamp = datetime.now(timezone.utc).strftime(
                                 "%Y%m%dT%H%M%S%fZ"
                             )
@@ -344,13 +324,20 @@ def main():
                                 )
                                 image_path = DATASET_PATH / capture_label / filename
 
-                            if not cv2.imwrite(str(image_path), frame):
-                                raise RuntimeError(
-                                    f"Could not save image {image_path}"
-                                )
+                            write_sensor_image_with_simim(
+                                sim_im,
+                                handles[CAMERA_PATH],
+                                image_path,
+                            )
 
-                            counters[capture_label] += 1
-                            last_save_time[capture_label] = time.monotonic()
+                            after_label, _, _ = command_from_held_keys(
+                                keyboard_state.snapshot(), profile
+                            )
+                            if after_label == capture_label:
+                                counters[capture_label] += 1
+                                last_save_time[capture_label] = time.monotonic()
+                            else:
+                                image_path.unlink(missing_ok=True)
 
             remaining = (
                 profile["control_interval_seconds"]

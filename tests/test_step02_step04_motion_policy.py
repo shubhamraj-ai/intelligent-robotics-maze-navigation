@@ -35,6 +35,21 @@ class FakeSim:
         self.calls.append((motor, velocity))
 
 
+class FakeSimIM:
+    def __init__(self):
+        self.calls = []
+
+    def readFromVisionSensor(self, camera_handle):
+        self.calls.append(("read", camera_handle))
+        return "image-handle"
+
+    def write(self, image_handle, filename):
+        self.calls.append(("write", image_handle, filename))
+
+    def destroy(self, image_handle):
+        self.calls.append(("destroy", image_handle))
+
+
 class ProfessorAlignedMotionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -129,6 +144,25 @@ class ProfessorAlignedMotionTests(unittest.TestCase):
 
     def test_step4_has_nonzero_command_stability_delay(self):
         self.assertGreater(step4.MIN_STABLE_COMMAND_SECONDS, 0)
+
+
+    def test_step4_simim_capture_never_returns_pixel_buffer(self):
+        sim_im = FakeSimIM()
+        path = ROOT / "test-frame.jpg"
+        step4.write_sensor_image_with_simim(sim_im, 42, path)
+        self.assertEqual(
+            sim_im.calls,
+            [
+                ("read", 42),
+                ("write", "image-handle", str(path)),
+                ("destroy", "image-handle"),
+            ],
+        )
+
+    def test_step4_has_no_raw_vision_sensor_image_rpc(self):
+        source = Path(step4.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("getVisionSensorImg", source)
+        self.assertIn('client.require("simIM")', source)
 
 
 if __name__ == "__main__":
