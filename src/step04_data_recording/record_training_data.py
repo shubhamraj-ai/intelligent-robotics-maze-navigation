@@ -24,10 +24,13 @@ MOTION_PROFILE_PATH = REPO_ROOT / "config" / "motion_profile.json"
 DATASET_PATH = REPO_ROOT / "dataset_simplified"
 CAMERA_PATH = "/PioneerP3DX/cam1"
 
-# Recording policy: keep it simple and visible.
+# Conservative recording policy for simulator stability:
+# - keyboard/motor control remains responsive locally;
+# - CoppeliaSim image RPC calls occur only when a frame is actually due;
+# - forward is intentionally sampled less often than turns.
 MIN_STABLE_COMMAND_SECONDS = 0.20
-FORWARD_SAVE_INTERVAL_SECONDS = 0.30
-TURN_SAVE_INTERVAL_SECONDS = 0.10
+FORWARD_SAVE_INTERVAL_SECONDS = 0.40
+TURN_SAVE_INTERVAL_SECONDS = 0.20
 
 
 def load_motion_profile(path: Path = MOTION_PROFILE_PATH) -> dict[str, float]:
@@ -214,6 +217,11 @@ def main():
             f"forward every {FORWARD_SAVE_INTERVAL_SECONDS:.2f}s; "
             f"turn every {TURN_SAVE_INTERVAL_SECONDS:.2f}s."
         )
+        print(
+            "Stability policy: motor RPC writes occur only on command changes; "
+            "camera RPC reads occur only when a dataset frame is due; "
+            "live OpenCV preview is disabled."
+        )
 
         client = RemoteAPIClient()
         sim = client.require("sim")
@@ -237,81 +245,88 @@ def main():
         for label in counters:
             (DATASET_PATH / label).mkdir(parents=True, exist_ok=True)
 
+        state = sim.getSimulationState()
+        if state in (sim.simulation_stopped, sim.simulation_paused):
+            raise RuntimeError(
+                "Simulation is stopped or paused; start it in CoppeliaSim."
+            )
+
         while True:
             loop_started = time.monotonic()
-            if sim.getSimulationState() in (
-                sim.simulation_stopped,
-                sim.simulation_paused,
-            ):
-                raise RuntimeError(
-                    "Simulation is stopped or paused; start it in CoppeliaSim."
-                )
 
-            before_label, left_velocity, right_velocity = command_from_held_keys(
-                keyboard_state.snapshot(), profile
+            held_snapshot = keyboard_state.snapshot()
+            current_label, left_velocity, right_velocity = command_from_held_keys(
+                held_snapshot, profile
             )
             last_motor_command = apply_motor_command_if_changed(
-                sim, left_motor, right_motor,
-                left_velocity, right_velocity, last_motor_command
-            )
-
-            raw_image, resolution = sim.getVisionSensorImg(handles[CAMERA_PATH])
-            frame = convert_image(raw_image, resolution, np, cv2)
-            cv2.imshow("PioneerP3DX Training Data", frame)
-            cv2.waitKey(1)
-
-            after_label, left_velocity, right_velocity = command_from_held_keys(
-                keyboard_state.snapshot(), profile
-            )
-            last_motor_command = apply_motor_command_if_changed(
-                sim, left_motor, right_motor,
-                left_velocity, right_velocity, last_motor_command
+                sim,
+                left_motor,
+                right_motor,
+                left_velocity,
+                right_velocity,
+                last_motor_command,
             )
 
             now = time.monotonic()
-            stable_label = (
-                before_label
-                if before_label is not None and after_label == before_label
-                else None
-            )
 
-            if stable_label is None:
+            if current_label is None:
                 active_label = None
                 active_since = None
             else:
-                if stable_label != active_label:
-                    active_label = stable_label
+                if current_label != active_label:
+                    active_label = current_label
                     active_since = now
                 elif (
                     active_since is not None
                     and now - active_since >= MIN_STABLE_COMMAND_SECONDS
                 ):
-                    interval = save_interval_for(stable_label)
-                    last_saved = last_save_time[stable_label]
+                    interval = save_interval_for(current_label)
+                    last_saved = last_save_time[current_label]
+
                     if last_saved is None or now - last_saved >= interval:
-                        timestamp = datetime.now(timezone.utc).strftime(
-                            "%Y%m%dT%H%M%S%fZ"
+                        # Request a camera frame only when we are actually due
+                        # to save one. Re-check keyboard state after the RPC so
+                        # a command transition during capture cannot be mislabeled.
+                        capture_label = current_label
+                        raw_image, resolution = sim.getVisionSensorImg(
+                            handles[CAMERA_PATH]
                         )
-                        counter = counters[stable_label] + 1
-                        filename = (
-                            f"{session_id}_{stable_label}_{timestamp}_{counter:06d}.jpg"
+                        after_label, _, _ = command_from_held_keys(
+                            keyboard_state.snapshot(), profile
                         )
-                        image_path = DATASET_PATH / stable_label / filename
 
-                        while image_path.exists():
-                            counter += 1
-                            filename = (
-                                f"{session_id}_{stable_label}_{timestamp}_{counter:06d}.jpg"
+                        if after_label == capture_label:
+                            frame = convert_image(raw_image, resolution, np, cv2)
+                            timestamp = datetime.now(timezone.utc).strftime(
+                                "%Y%m%dT%H%M%S%fZ"
                             )
-                            image_path = DATASET_PATH / stable_label / filename
+                            counter = counters[capture_label] + 1
+                            filename = (
+                                f"{session_id}_{capture_label}_{timestamp}_"
+                                f"{counter:06d}.jpg"
+                            )
+                            image_path = DATASET_PATH / capture_label / filename
 
-                        if not cv2.imwrite(str(image_path), frame):
-                            raise RuntimeError(f"Could not save image {image_path}")
+                            while image_path.exists():
+                                counter += 1
+                                filename = (
+                                    f"{session_id}_{capture_label}_{timestamp}_"
+                                    f"{counter:06d}.jpg"
+                                )
+                                image_path = DATASET_PATH / capture_label / filename
 
-                        counters[stable_label] += 1
-                        last_save_time[stable_label] = now
+                            if not cv2.imwrite(str(image_path), frame):
+                                raise RuntimeError(
+                                    f"Could not save image {image_path}"
+                                )
 
-            remaining = profile["control_interval_seconds"] - (time.monotonic() - loop_started)
+                            counters[capture_label] += 1
+                            last_save_time[capture_label] = time.monotonic()
+
+            remaining = (
+                profile["control_interval_seconds"]
+                - (time.monotonic() - loop_started)
+            )
             if remaining > 0:
                 time.sleep(remaining)
     except KeyboardInterrupt:
@@ -341,16 +356,6 @@ def main():
                             file=sys.stderr,
                         )
                         exit_status = 1
-
-        if cv2 is not None:
-            try:
-                cv2.destroyAllWindows()
-            except Exception as error:
-                print(
-                    f"STEP 4 CLEANUP ERROR: Could not close OpenCV windows: {error}",
-                    file=sys.stderr,
-                )
-                exit_status = 1
 
         print(f"Session ID: {session_id}")
         print_distribution(counters)
