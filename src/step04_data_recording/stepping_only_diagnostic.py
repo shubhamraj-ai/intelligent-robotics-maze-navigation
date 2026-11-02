@@ -22,6 +22,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MOTION_PROFILE_PATH = REPO_ROOT / "config" / "motion_profile.json"
+LUA_LIFECYCLE_SCRIPT_PATH = Path(__file__).with_name("lua_lifecycle_only.lua")
 
 
 def load_motion_profile(path: Path = MOTION_PROFILE_PATH) -> dict[str, float]:
@@ -105,11 +106,12 @@ def apply_motor_command_if_changed(
 
 
 def main():
-    print("STEP 4 DIAGNOSTIC - STEPPING ONLY")
+    print("STEP 4 DIAGNOSTIC - LUA LIFECYCLE ONLY")
     print("W - Forward; A - Curved left; D - Curved right.")
     print("Release keys (or press multiple W/A/D keys) to stop.")
     print("IMPORTANT: Open the maze and leave SIMULATION STOPPED.")
-    print("NO Lua script. NO string signals. NO camera/image calls.")
+    print("Temporary Lua simulation script lifecycle ENABLED.")
+    print("NO string signals. NO camera/image calls.")
     print("Use terminal Ctrl+C to finish.")
 
     sim = None
@@ -120,6 +122,7 @@ def main():
     keyboard_state = KeyboardState()
     simulation_started = False
     stepping_enabled = False
+    lua_script_handle = None
     exit_status = 0
 
     try:
@@ -138,7 +141,7 @@ def main():
         )
         print(
             "Diagnostic policy: event-driven keys + state-change-only motor writes "
-            "+ synchronized stepping; no Lua/signals/vision."
+            "+ synchronized stepping + temporary Lua lifecycle; no signals/vision."
         )
 
         client = RemoteAPIClient()
@@ -156,6 +159,21 @@ def main():
                 "this diagnostic."
             )
 
+        script_text = LUA_LIFECYCLE_SCRIPT_PATH.read_text(encoding="utf-8")
+        lua_script_handle = sim.createScript(
+            sim.scripttype_simulation,
+            script_text,
+            0,
+            "lua",
+        )
+        if lua_script_handle < 0:
+            raise RuntimeError("CoppeliaSim could not create lifecycle-only Lua script")
+        try:
+            sim.setObjectAlias(lua_script_handle, "Step4LuaLifecycleOnly")
+        except Exception:
+            pass
+        print("LUA_LIFECYCLE_SCRIPT_INSTALLED")
+
         sim.setStepping(True)
         stepping_enabled = True
         sim.startSimulation()
@@ -168,8 +186,8 @@ def main():
         for _ in range(4):
             sim.step()
 
-        print("STEPPING_ONLY_PROBE_PASS")
-        print("READY_TO_DRIVE_STEPPING_ONLY")
+        print("LUA_LIFECYCLE_STEPPING_PROBE_PASS")
+        print("READY_TO_DRIVE_LUA_LIFECYCLE_ONLY")
 
         while True:
             loop_started = time.monotonic()
@@ -252,7 +270,16 @@ def main():
                 except Exception:
                     pass
 
-        print("STEPPING_ONLY_DIAGNOSTIC_FINISHED")
+            if lua_script_handle is not None:
+                try:
+                    sim.removeObjects([lua_script_handle])
+                except Exception as error:
+                    print(
+                        f"LUA-LIFECYCLE CLEANUP WARNING: temporary script not removed: {error}",
+                        file=sys.stderr,
+                    )
+
+        print("LUA_LIFECYCLE_ONLY_DIAGNOSTIC_FINISHED")
 
     return exit_status
 
