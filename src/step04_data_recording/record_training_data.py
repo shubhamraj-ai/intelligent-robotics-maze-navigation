@@ -1,12 +1,15 @@
-"""Record cleaner W/A/D-labelled camera images for neural-network training.
+"""Record W/A/D-labelled camera images using synchronized CoppeliaSim stepping.
 
-The code intentionally remains close to the original Step-4 recorder while
-addressing the factors highlighted by the professor:
-- it uses the exact same tunable speed/curvature profile as Step 2;
-- it records only after a command has remained stable briefly;
-- it saves forward frames less frequently than turn frames to reduce the
-  previous extreme forward-class dominance;
-- filenames include a session ID so later training can keep traversals separate.
+Stability-focused Step-4 design:
+- uses exactly the same professor-aligned motion profile as Step 2;
+- keyboard events update requested motion state without is_pressed() polling;
+- motor commands are sent only when requested state changes;
+- this recorder owns CoppeliaSim stepping mode and advances one step at a time;
+- image capture is deliberately sparse (0.5 Hz) and begins only after a stable
+  command has been held for 0.75 seconds;
+- images are transferred as greyscale to reduce ZMQ buffer size, then expanded
+  back to 3-channel BGR before JPEG saving for downstream compatibility;
+- live OpenCV preview is disabled.
 """
 
 from __future__ import annotations
@@ -24,15 +27,10 @@ MOTION_PROFILE_PATH = REPO_ROOT / "config" / "motion_profile.json"
 DATASET_PATH = REPO_ROOT / "dataset_simplified"
 CAMERA_PATH = "/PioneerP3DX/cam1"
 
-# Ultra-conservative recording policy for simulator stability:
-# - keyboard/motor control remains responsive locally;
-# - CoppeliaSim image RPC calls occur only when a frame is actually due;
-# - all labels use the same low 1 Hz camera-request rate;
-# - the first capture waits for 0.75 s of stable motion to avoid RPC work
-#   during the immediate transition into a turn.
 MIN_STABLE_COMMAND_SECONDS = 0.75
-FORWARD_SAVE_INTERVAL_SECONDS = 1.00
-TURN_SAVE_INTERVAL_SECONDS = 1.00
+FORWARD_SAVE_INTERVAL_SECONDS = 2.00
+TURN_SAVE_INTERVAL_SECONDS = 2.00
+VISION_IMAGE_OPTIONS = 1  # bit0: request greyscale image from CoppeliaSim
 
 
 def load_motion_profile(path: Path = MOTION_PROFILE_PATH) -> dict[str, float]:
@@ -124,13 +122,14 @@ def apply_motor_command_if_changed(
     command = (float(left_velocity), float(right_velocity))
     if command == previous_command:
         return previous_command
+
     sim.setJointTargetVelocity(left_motor, command[0])
     sim.setJointTargetVelocity(right_motor, command[1])
     return command
 
 
 def save_interval_for(label: str) -> float:
-    """Subsample long forward runs more strongly than shorter turn states."""
+    """Return the deliberately low capture interval for each class."""
     if label == "forward":
         return FORWARD_SAVE_INTERVAL_SECONDS
     if label in ("left", "right"):
@@ -138,27 +137,32 @@ def save_interval_for(label: str) -> float:
     raise ValueError(f"Unknown label: {label}")
 
 
-def convert_image(raw_image, resolution, np, cv2):
-    """Validate and convert CoppeliaSim's bottom-up RGB buffer to BGR."""
+def convert_greyscale_image(raw_image, resolution, np_module, cv2_module):
+    """Validate a greyscale sensor buffer and expand it to 3-channel BGR."""
     if len(resolution) != 2:
         raise ValueError(f"Expected [width, height], received {resolution}")
+
     width, height = resolution
     if not all(isinstance(value, int) and value > 0 for value in resolution):
         raise ValueError(
             f"Camera resolution must contain positive integers: {resolution}"
         )
-    expected_bytes = width * height * 3
+
+    expected_bytes = width * height
     if len(raw_image) != expected_bytes:
         raise ValueError(
-            f"Expected {expected_bytes} RGB bytes, received {len(raw_image)}"
+            f"Expected {expected_bytes} greyscale bytes, received {len(raw_image)}"
         )
-    frame = np.frombuffer(raw_image, dtype=np.uint8).reshape(height, width, 3)
-    frame = cv2.flip(frame, 0)
-    return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+
+    frame_gray = np_module.frombuffer(
+        raw_image, dtype=np_module.uint8
+    ).reshape(height, width)
+    frame_gray = cv2_module.flip(frame_gray, 0)
+    return cv2_module.cvtColor(frame_gray, cv2_module.COLOR_GRAY2BGR)
 
 
 def print_distribution(counters: dict[str, int]) -> None:
-    """Print the session distribution so imbalance is visible immediately."""
+    """Print session distribution so imbalance is visible immediately."""
     total = sum(counters.values())
     print("Saved images: " + ", ".join(f"{k}={v}" for k, v in counters.items()))
     if not total:
@@ -172,16 +176,19 @@ def print_distribution(counters: dict[str, int]) -> None:
     if max(shares.values()) > 0.70:
         print(
             "STEP 4 DATA WARNING: One class exceeds 70% of this session. "
-            "Before Step 5, collect additional clean examples for the underrepresented "
-            "classes instead of relying immediately on strong class weighting."
+            "Before Step 5, collect additional clean examples for the "
+            "underrepresented classes instead of relying immediately on "
+            "strong class weighting."
         )
 
 
 def main():
-    print("STEP 4 - Training Data Recording")
+    print("STEP 4 - Synchronized Training Data Recording")
     print("W - Forward; A - Curved left; D - Curved right.")
     print("Release keys (or press multiple W/A/D keys) to stop.")
-    print("Start the simulation in CoppeliaSim; use terminal Ctrl+C to exit.")
+    print("IMPORTANT: Open the maze but leave CoppeliaSim SIMULATION STOPPED.")
+    print("This recorder starts/stops the simulation and owns stepping mode.")
+    print("Use terminal Ctrl+C to exit.")
 
     sim = None
     cv2 = None
@@ -195,6 +202,8 @@ def main():
     keyboard_hook = None
     keyboard_state = KeyboardState()
     exit_status = 0
+    simulation_started_by_recorder = False
+    stepping_enabled = False
     session_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
     try:
@@ -205,6 +214,7 @@ def main():
 
         profile = load_motion_profile()
         keyboard_hook = keyboard.hook(keyboard_state.handle_event)
+
         print(f"Session ID: {session_id}")
         print(f"Motion profile: {MOTION_PROFILE_PATH}")
         print(
@@ -220,15 +230,14 @@ def main():
             f"turn every {TURN_SAVE_INTERVAL_SECONDS:.2f}s."
         )
         print(
-            "Stability policy: motor RPC writes occur only on command changes; "
-            "camera RPC reads occur only when a dataset frame is due; "
-            "live OpenCV preview is disabled."
+            "Stability policy: synchronized stepping; state-change-only motor "
+            "writes; 0.5 Hz greyscale camera transfer; no live preview."
         )
 
         client = RemoteAPIClient()
         sim = client.require("sim")
-        handles = {}
 
+        handles = {}
         for path in (
             "/PioneerP3DX",
             "/PioneerP3DX/leftMotor",
@@ -248,10 +257,25 @@ def main():
             (DATASET_PATH / label).mkdir(parents=True, exist_ok=True)
 
         state = sim.getSimulationState()
-        if state in (sim.simulation_stopped, sim.simulation_paused):
+        if state != sim.simulation_stopped:
             raise RuntimeError(
-                "Simulation is stopped or paused; start it in CoppeliaSim."
+                "Simulation is already running/paused. Stop it in CoppeliaSim "
+                "before launching this synchronized recorder."
             )
+
+        sim.setStepping(True)
+        stepping_enabled = True
+        sim.startSimulation()
+        simulation_started_by_recorder = True
+
+        # Warm up several deterministic simulation steps before accepting data.
+        last_motor_command = apply_motor_command_if_changed(
+            sim, left_motor, right_motor, 0.0, 0.0, last_motor_command
+        )
+        for _ in range(4):
+            sim.step()
+
+        print("SYNCHRONIZED_SIMULATION_RUNNING")
 
         while True:
             loop_started = time.monotonic()
@@ -269,6 +293,9 @@ def main():
                 last_motor_command,
             )
 
+            # Advance exactly one simulator step, then (only if due) retrieve
+            # the image generated by that synchronized step.
+            sim.step()
             now = time.monotonic()
 
             if current_label is None:
@@ -286,19 +313,19 @@ def main():
                     last_saved = last_save_time[current_label]
 
                     if last_saved is None or now - last_saved >= interval:
-                        # Request a camera frame only when we are actually due
-                        # to save one. Re-check keyboard state after the RPC so
-                        # a command transition during capture cannot be mislabeled.
                         capture_label = current_label
                         raw_image, resolution = sim.getVisionSensorImg(
-                            handles[CAMERA_PATH]
+                            handles[CAMERA_PATH],
+                            VISION_IMAGE_OPTIONS,
                         )
                         after_label, _, _ = command_from_held_keys(
                             keyboard_state.snapshot(), profile
                         )
 
                         if after_label == capture_label:
-                            frame = convert_image(raw_image, resolution, np, cv2)
+                            frame = convert_greyscale_image(
+                                raw_image, resolution, np, cv2
+                            )
                             timestamp = datetime.now(timezone.utc).strftime(
                                 "%Y%m%dT%H%M%S%fZ"
                             )
@@ -331,6 +358,7 @@ def main():
             )
             if remaining > 0:
                 time.sleep(remaining)
+
     except KeyboardInterrupt:
         pass
     except Exception as error:
@@ -348,16 +376,44 @@ def main():
                 exit_status = 1
 
         if sim is not None:
-            for motor in (left_motor, right_motor):
-                if motor is not None:
-                    try:
-                        sim.setJointTargetVelocity(motor, 0.0)
-                    except Exception as error:
-                        print(
-                            f"STEP 4 CLEANUP ERROR: Could not stop a motor: {error}",
-                            file=sys.stderr,
-                        )
-                        exit_status = 1
+            try:
+                if left_motor is not None and right_motor is not None:
+                    last_motor_command = apply_motor_command_if_changed(
+                        sim,
+                        left_motor,
+                        right_motor,
+                        0.0,
+                        0.0,
+                        last_motor_command,
+                    )
+                    if simulation_started_by_recorder:
+                        sim.step()
+            except Exception as error:
+                print(
+                    f"STEP 4 CLEANUP ERROR: Could not stop motors cleanly: {error}",
+                    file=sys.stderr,
+                )
+                exit_status = 1
+
+            if simulation_started_by_recorder:
+                try:
+                    sim.stopSimulation()
+                except Exception as error:
+                    print(
+                        f"STEP 4 CLEANUP ERROR: Could not stop simulation: {error}",
+                        file=sys.stderr,
+                    )
+                    exit_status = 1
+
+            if stepping_enabled:
+                try:
+                    sim.setStepping(False)
+                except Exception as error:
+                    print(
+                        f"STEP 4 CLEANUP ERROR: Could not disable stepping: {error}",
+                        file=sys.stderr,
+                    )
+                    exit_status = 1
 
         print(f"Session ID: {session_id}")
         print_distribution(counters)
