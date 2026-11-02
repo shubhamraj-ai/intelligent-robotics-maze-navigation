@@ -116,8 +116,8 @@ class ProfessorAlignedMotionTests(unittest.TestCase):
         )
         self.assertEqual(sim.calls, [("left", 0.1), ("right", 1.0)])
 
-    def test_step4_subsamples_forward_more_than_turns(self):
-        self.assertGreater(
+    def test_step4_uses_uniform_low_rate_capture(self):
+        self.assertEqual(
             step4.save_interval_for("forward"),
             step4.save_interval_for("left"),
         )
@@ -125,6 +125,7 @@ class ProfessorAlignedMotionTests(unittest.TestCase):
             step4.save_interval_for("left"),
             step4.save_interval_for("right"),
         )
+        self.assertEqual(step4.save_interval_for("forward"), 1.00)
 
     def test_step4_has_nonzero_command_stability_delay(self):
         self.assertGreater(step4.MIN_STABLE_COMMAND_SECONDS, 0)

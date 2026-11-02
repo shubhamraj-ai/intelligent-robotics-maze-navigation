@@ -24,13 +24,15 @@ MOTION_PROFILE_PATH = REPO_ROOT / "config" / "motion_profile.json"
 DATASET_PATH = REPO_ROOT / "dataset_simplified"
 CAMERA_PATH = "/PioneerP3DX/cam1"
 
-# Conservative recording policy for simulator stability:
+# Ultra-conservative recording policy for simulator stability:
 # - keyboard/motor control remains responsive locally;
 # - CoppeliaSim image RPC calls occur only when a frame is actually due;
-# - forward is intentionally sampled less often than turns.
-MIN_STABLE_COMMAND_SECONDS = 0.20
-FORWARD_SAVE_INTERVAL_SECONDS = 0.40
-TURN_SAVE_INTERVAL_SECONDS = 0.20
+# - all labels use the same low 1 Hz camera-request rate;
+# - the first capture waits for 0.75 s of stable motion to avoid RPC work
+#   during the immediate transition into a turn.
+MIN_STABLE_COMMAND_SECONDS = 0.75
+FORWARD_SAVE_INTERVAL_SECONDS = 1.00
+TURN_SAVE_INTERVAL_SECONDS = 1.00
 
 
 def load_motion_profile(path: Path = MOTION_PROFILE_PATH) -> dict[str, float]:
