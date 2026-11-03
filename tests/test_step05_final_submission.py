@@ -75,6 +75,17 @@ class Step05FinalSubmissionTests(unittest.TestCase):
             self.assertIn(session, self.all_source)
         self.assertIn("EXPECTED_SHAPE = (50, 50, 3)", self.all_source)
         self.assertIn("385", self.all_source)
+        self.assertIn(
+            "/content/drive/MyDrive/Intelligent_Robotics_Design_Project/"
+            "Step05_Final_Simple_Perceptron_2026-11-04/"
+            "dataset_step05_official.zip",
+            self.all_source,
+        )
+        self.assertIn(
+            "/content/drive/MyDrive/Intelligent_Robotics_Design_Project/"
+            "Step05_Final_Simple_Perceptron_2026-11-04/Colab_Output",
+            self.all_source,
+        )
 
     def test_notebook_exports_minimal_h5_model_with_numpy_parity_check(self):
         self.assertIn(
