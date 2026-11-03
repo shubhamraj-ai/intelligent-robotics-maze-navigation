@@ -11,9 +11,9 @@ Evaluation uses leave-one-session-out cross-validation, so neighboring frames
 from the same traversal are never randomly split across train and evaluation
 sets.
 
-This controlled follow-up keeps the same single-layer model and preprocessing
-while applying balanced class weights computed from each training fold only.
-No oversampling is used, and held-out-session labels never influence weights.
+The selected final candidate is unweighted. Balanced class weights remain an
+experimental fallback, computed from each training fold only. No oversampling
+is used, and held-out-session labels never influence weights.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATASET_ROOT = REPO_ROOT / "dataset_step04_fresh"
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "models" / "step05_balanced_perceptron"
+DEFAULT_OUTPUT_DIR = REPO_ROOT / "models" / "step05_simple_perceptron"
 
 LABELS = ("forward", "left", "right")
 LABEL_TO_INDEX = {label: index for index, label in enumerate(LABELS)}
@@ -66,14 +66,14 @@ def parse_args() -> argparse.Namespace:
         help="Session directory names to include.",
     )
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
-    parser.add_argument("--epochs", type=int, default=400)
-    parser.add_argument("--learning-rate", type=float, default=0.08)
+    parser.add_argument("--epochs", type=int, default=3200)
+    parser.add_argument("--learning-rate", type=float, default=0.01)
     parser.add_argument("--l2", type=float, default=1e-4)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--class-weighting",
         choices=("balanced", "none"),
-        default="balanced",
+        default="none",
         help=(
             "Class-weight strategy. 'balanced' uses N/(K*n_c) from each "
             "training fold only; 'none' reproduces the unweighted objective."
@@ -397,7 +397,7 @@ def main() -> int:
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print("STEP 5 - BALANCED SIMPLE SOFTMAX PERCEPTRON")
+    print("STEP 5 - SIMPLE SOFTMAX PERCEPTRON")
     print("Evaluation: leave-one-session-out cross-validation")
     print("Random frame splitting: DISABLED")
     print(f"Class weighting: {args.class_weighting}")
@@ -477,12 +477,13 @@ def main() -> int:
             "type": "leave_one_session_out_cross_validation",
             "sessions": list(args.sessions),
             "random_frame_split": False,
+            "fold_seeds": [args.seed + i for i in range(1, len(sessions) + 1)],
         },
         "folds": fold_metrics,
         "pooled": pooled_metrics,
     }
 
-    report_path = output_dir / "step05_balanced_perceptron_cv.json"
+    report_path = output_dir / "step05_simple_perceptron_cv.json"
     report_path.write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -500,11 +501,11 @@ def main() -> int:
         epochs=args.epochs,
         learning_rate=args.learning_rate,
         l2=args.l2,
-        seed=args.seed + 1000,
+        seed=args.seed,
         class_weights=full_class_weights,
     )
 
-    model_path = output_dir / "maze_navigation_simple_perceptron_balanced.npz"
+    model_path = output_dir / "maze_navigation_simple_perceptron.npz"
     np.savez_compressed(
         model_path,
         weights=weights,
@@ -522,6 +523,7 @@ def main() -> int:
         "input_shape_hwc": list(EXPECTED_SHAPE),
         "preprocessing": "BGR -> grayscale -> float32 / 255 -> flatten",
         "class_weighting": args.class_weighting,
+        "training_config": report["model"],
         "class_weights": (
             {
                 label: float(full_class_weights[index])
@@ -532,26 +534,24 @@ def main() -> int:
         ),
         "final_training_loss": float(losses[-1]),
         "status": (
-            "baseline_only; review cross-validation turn recall before "
-            "promoting to shadow or autonomous control"
+            "offline_step05_only; Step 6 live behavior remains unvalidated"
         ),
     }
 
-    metadata_path = output_dir / "maze_navigation_simple_perceptron_balanced.json"
+    metadata_path = output_dir / "maze_navigation_simple_perceptron.json"
     metadata_path.write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
 
     print()
-    print("STEP05_BALANCED_PERCEPTRON_COMPLETE")
+    print("STEP05_SIMPLE_PERCEPTRON_COMPLETE")
     print(f"CV report : {report_path}")
     print(f"Model     : {model_path}")
     print(f"Metadata  : {metadata_path}")
     print()
     print(
-        "IMPORTANT: Compare this balanced result against the frozen unweighted "
-        "baseline before any shadow or robot-control promotion."
+        "Step 5 offline artifacts saved. Step 6 autonomous control is not completed."
     )
     return 0
 
