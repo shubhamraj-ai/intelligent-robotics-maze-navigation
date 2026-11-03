@@ -1,6 +1,6 @@
 -- Persistent Step-4 diagnostic: stable label read + camera read only.
 -- Scene-owned script: no runtime creation/removal.
--- No image saving, no dataset/session signals, no sim.addLog calls.
+-- No image-file writing, no dataset/session signals, no logging calls.
 
 local LABEL_SIGNAL = 'step4_capture_label'
 local MIN_STABLE_SECONDS = 0.75
@@ -48,7 +48,7 @@ function sysCall_sensing()
     end
 
     -- Deliberately read and discard the image.
-    -- No saveImage call and no image data is transferred to Python.
+    -- No image-file write and no image data is transferred to Python.
     local image, resolution = sim.getVisionSensorImg(cameraHandle, 1)
     if image ~= nil and resolution ~= nil then
         lastRead[label] = now
