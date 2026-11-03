@@ -106,11 +106,12 @@ def apply_motor_command_if_changed(
 
 
 def main():
-    print("STEP 4 DIAGNOSTIC - LUA LIFECYCLE ONLY")
+    print("STEP 4 DIAGNOSTIC - LUA LIFECYCLE / NO REMOVE")
     print("W - Forward; A - Curved left; D - Curved right.")
     print("Release keys (or press multiple W/A/D keys) to stop.")
     print("IMPORTANT: Open the maze and leave SIMULATION STOPPED.")
     print("Temporary Lua simulation script lifecycle ENABLED.")
+    print("Cleanup removal of the Lua script is intentionally DISABLED.")
     print("NO string signals. NO camera/image calls.")
     print("Use terminal Ctrl+C to finish.")
 
@@ -271,15 +272,12 @@ def main():
                     pass
 
             if lua_script_handle is not None:
-                try:
-                    sim.removeObjects([lua_script_handle])
-                except Exception as error:
-                    print(
-                        f"LUA-LIFECYCLE CLEANUP WARNING: temporary script not removed: {error}",
-                        file=sys.stderr,
-                    )
+                print(
+                    "LUA_LIFECYCLE_DIAGNOSTIC_NOTE: temporary Lua script intentionally "
+                    "left in the unsaved scene for teardown-isolation testing."
+                )
 
-        print("LUA_LIFECYCLE_ONLY_DIAGNOSTIC_FINISHED")
+        print("LUA_LIFECYCLE_NO_REMOVE_DIAGNOSTIC_FINISHED")
 
     return exit_status
 
