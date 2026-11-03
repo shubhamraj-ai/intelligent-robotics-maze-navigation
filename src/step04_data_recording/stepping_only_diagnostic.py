@@ -106,13 +106,13 @@ def apply_motor_command_if_changed(
 
 
 def main():
-    print("STEP 4 DIAGNOSTIC - PERSISTENT LUA + SIGNAL WRITE ONLY")
+    print("STEP 4 DIAGNOSTIC - PERSISTENT LUA + SIGNAL READ ONLY")
     print("W - Forward; A - Curved left; D - Curved right.")
     print("Release keys (or press multiple W/A/D keys) to stop.")
     print("IMPORTANT: Open the maze and leave SIMULATION STOPPED.")
     print("Persistent Lua script must already be stored in the loaded scene.")
     print("Python writes ONE dynamic W/A/D label string signal.")
-    print("Persistent Lua does NOT read the signal in this test.")
+    print("Persistent Lua reads the dynamic W/A/D label signal in this test.")
     print("NO runtime Lua creation/removal. NO camera/image calls.")
     print("Use terminal Ctrl+C to finish.")
 
@@ -144,7 +144,7 @@ def main():
         print(
             "Diagnostic policy: event-driven keys + state-change-only motor writes "
             "+ synchronized stepping + one dynamic Python string-signal write; "
-            "persistent Lua is scene-owned and does not read the signal; no vision."
+            "persistent Lua is scene-owned and reads the signal; no vision."
         )
 
         client = RemoteAPIClient()
@@ -177,8 +177,8 @@ def main():
         for _ in range(4):
             sim.step()
 
-        print("PERSISTENT_SIGNAL_WRITE_PROBE_PASS")
-        print("READY_TO_DRIVE_PERSISTENT_SIGNAL_WRITE_ONLY")
+        print("PERSISTENT_SIGNAL_READ_PROBE_PASS")
+        print("READY_TO_DRIVE_PERSISTENT_SIGNAL_READ_ONLY")
 
         while True:
             loop_started = time.monotonic()
@@ -271,7 +271,7 @@ def main():
                 except Exception:
                     pass
 
-        print("PERSISTENT_SIGNAL_WRITE_ONLY_DIAGNOSTIC_FINISHED")
+        print("PERSISTENT_SIGNAL_READ_ONLY_DIAGNOSTIC_FINISHED")
 
     return exit_status
 
