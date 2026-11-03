@@ -7,7 +7,6 @@ local LABEL_SIGNAL = 'step4_capture_label'
 function sysCall_init()
     sim = require('sim')
     lastLabel = ''
-    sim.addLog(sim.verbosity_scriptinfos, 'STEP4_PERSISTENT_SIGNAL_READ_INIT')
 end
 
 function sysCall_sensing()
@@ -18,9 +17,5 @@ function sysCall_sensing()
 
     if label ~= lastLabel then
         lastLabel = label
-        sim.addLog(
-            sim.verbosity_scriptinfos,
-            'STEP4_PERSISTENT_SIGNAL_READ -> ' .. label
-        )
     end
 end
