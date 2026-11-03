@@ -11,9 +11,9 @@ Evaluation uses leave-one-session-out cross-validation, so neighboring frames
 from the same traversal are never randomly split across train and evaluation
 sets.
 
-This first baseline applies no class weighting or oversampling. If turn recall
-is inadequate, balancing is introduced only after measuring the unweighted
-baseline.
+This controlled follow-up keeps the same single-layer model and preprocessing
+while applying balanced class weights computed from each training fold only.
+No oversampling is used, and held-out-session labels never influence weights.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATASET_ROOT = REPO_ROOT / "dataset_step04_fresh"
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "models" / "step05_simple_perceptron"
+DEFAULT_OUTPUT_DIR = REPO_ROOT / "models" / "step05_balanced_perceptron"
 
 LABELS = ("forward", "left", "right")
 LABEL_TO_INDEX = {label: index for index, label in enumerate(LABELS)}
@@ -70,6 +70,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=0.08)
     parser.add_argument("--l2", type=float, default=1e-4)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--class-weighting",
+        choices=("balanced", "none"),
+        default="balanced",
+        help=(
+            "Class-weight strategy. 'balanced' uses N/(K*n_c) from each "
+            "training fold only; 'none' reproduces the unweighted objective."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -137,6 +146,20 @@ def summarize_counts(y: np.ndarray) -> dict[str, int]:
     }
 
 
+def balanced_class_weights(y: np.ndarray) -> np.ndarray:
+    """Return sklearn-style balanced weights N/(K*n_c) for LABELS."""
+    if y.ndim != 1 or len(y) == 0:
+        raise ValueError("y must be a non-empty 1D array")
+
+    class_count = len(LABELS)
+    counts = np.bincount(y.astype(np.int64), minlength=class_count)
+    if np.any(counts <= 0):
+        raise ValueError("Every class must be present to compute balanced weights")
+
+    weights = len(y) / (class_count * counts.astype(np.float64))
+    return weights.astype(np.float32)
+
+
 def _softmax(logits: np.ndarray) -> np.ndarray:
     shifted = logits - logits.max(axis=1, keepdims=True)
     exp = np.exp(shifted)
@@ -151,6 +174,7 @@ def train_perceptron(
     learning_rate: float,
     l2: float,
     seed: int,
+    class_weights: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, list[float]]:
     if epochs <= 0:
         raise ValueError("epochs must be positive")
@@ -162,6 +186,25 @@ def train_perceptron(
     rng = np.random.default_rng(seed)
     feature_count = x.shape[1]
     class_count = len(LABELS)
+
+    if class_weights is None:
+        effective_class_weights = np.ones(class_count, dtype=np.float32)
+    else:
+        effective_class_weights = np.asarray(class_weights, dtype=np.float32)
+        if effective_class_weights.shape != (class_count,):
+            raise ValueError(
+                f"class_weights must have shape {(class_count,)}, "
+                f"got {effective_class_weights.shape}"
+            )
+        if not np.all(np.isfinite(effective_class_weights)):
+            raise ValueError("class_weights must be finite")
+        if np.any(effective_class_weights <= 0):
+            raise ValueError("class_weights must be strictly positive")
+
+    sample_weights = effective_class_weights[y]
+    total_sample_weight = float(sample_weights.sum())
+    if total_sample_weight <= 0:
+        raise ValueError("Total sample weight must be positive")
 
     weights = rng.normal(
         loc=0.0,
@@ -182,11 +225,17 @@ def train_perceptron(
             1e-8,
             1.0,
         )
-        data_loss = -float(np.mean(np.log(clipped)))
+        data_loss = -float(
+            np.sum(sample_weights * np.log(clipped)) / total_sample_weight
+        )
         reg_loss = 0.5 * float(l2) * float(np.sum(weights * weights))
         losses.append(data_loss + reg_loss)
 
-        gradient_logits = (probabilities - targets) / len(y)
+        gradient_logits = (
+            (probabilities - targets)
+            * sample_weights[:, None]
+            / total_sample_weight
+        )
         gradient_weights = x.T @ gradient_logits + float(l2) * weights
         gradient_bias = gradient_logits.sum(axis=0)
 
@@ -289,8 +338,16 @@ def evaluate_fold(
     learning_rate: float,
     l2: float,
     seed: int,
+    class_weighting: str,
 ) -> tuple[dict, np.ndarray, np.ndarray]:
     x_train, y_train = combine_sessions(train_sessions)
+
+    if class_weighting == "balanced":
+        fold_class_weights = balanced_class_weights(y_train)
+    elif class_weighting == "none":
+        fold_class_weights = None
+    else:
+        raise ValueError(f"Unsupported class_weighting: {class_weighting}")
 
     weights, bias, losses = train_perceptron(
         x_train,
@@ -299,6 +356,7 @@ def evaluate_fold(
         learning_rate=learning_rate,
         l2=l2,
         seed=seed,
+        class_weights=fold_class_weights,
     )
 
     predictions = predict_labels(held_out.x, weights, bias)
@@ -311,6 +369,15 @@ def evaluate_fold(
             "train_sessions": [session.name for session in train_sessions],
             "train_counts": summarize_counts(y_train),
             "evaluation_counts": summarize_counts(held_out.y),
+            "class_weighting": class_weighting,
+            "class_weights": (
+                {
+                    label: float(fold_class_weights[index])
+                    for index, label in enumerate(LABELS)
+                }
+                if fold_class_weights is not None
+                else {label: 1.0 for label in LABELS}
+            ),
             "final_training_loss": float(losses[-1]),
         }
     )
@@ -330,10 +397,11 @@ def main() -> int:
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print("STEP 5 - SIMPLE SOFTMAX PERCEPTRON BASELINE")
+    print("STEP 5 - BALANCED SIMPLE SOFTMAX PERCEPTRON")
     print("Evaluation: leave-one-session-out cross-validation")
     print("Random frame splitting: DISABLED")
-    print("Class weighting/oversampling: DISABLED (baseline)")
+    print(f"Class weighting: {args.class_weighting}")
+    print("Oversampling: DISABLED")
     print("Preprocessing: BGR -> grayscale -> [0,1] -> flatten")
     print(f"Epochs: {args.epochs}")
     print(f"Learning rate: {args.learning_rate}")
@@ -368,6 +436,7 @@ def main() -> int:
             learning_rate=args.learning_rate,
             l2=args.l2,
             seed=args.seed + fold_index,
+            class_weighting=args.class_weighting,
         )
 
         fold_metrics.append(metrics)
@@ -395,7 +464,7 @@ def main() -> int:
             "learning_rate": float(args.learning_rate),
             "l2": float(args.l2),
             "seed": int(args.seed),
-            "class_weighting": "none",
+            "class_weighting": args.class_weighting,
         },
         "preprocessing": {
             "expected_input_shape_hwc": list(EXPECTED_SHAPE),
@@ -413,13 +482,18 @@ def main() -> int:
         "pooled": pooled_metrics,
     }
 
-    report_path = output_dir / "step05_simple_perceptron_baseline_cv.json"
+    report_path = output_dir / "step05_balanced_perceptron_cv.json"
     report_path.write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
 
     x_all, y_all = combine_sessions(sessions)
+    full_class_weights = (
+        balanced_class_weights(y_all)
+        if args.class_weighting == "balanced"
+        else None
+    )
     weights, bias, losses = train_perceptron(
         x_all,
         y_all,
@@ -427,9 +501,10 @@ def main() -> int:
         learning_rate=args.learning_rate,
         l2=args.l2,
         seed=args.seed + 1000,
+        class_weights=full_class_weights,
     )
 
-    model_path = output_dir / "maze_navigation_simple_perceptron_baseline.npz"
+    model_path = output_dir / "maze_navigation_simple_perceptron_balanced.npz"
     np.savez_compressed(
         model_path,
         weights=weights,
@@ -446,7 +521,15 @@ def main() -> int:
         "labels": list(LABELS),
         "input_shape_hwc": list(EXPECTED_SHAPE),
         "preprocessing": "BGR -> grayscale -> float32 / 255 -> flatten",
-        "class_weighting": "none",
+        "class_weighting": args.class_weighting,
+        "class_weights": (
+            {
+                label: float(full_class_weights[index])
+                for index, label in enumerate(LABELS)
+            }
+            if full_class_weights is not None
+            else {label: 1.0 for label in LABELS}
+        ),
         "final_training_loss": float(losses[-1]),
         "status": (
             "baseline_only; review cross-validation turn recall before "
@@ -454,21 +537,21 @@ def main() -> int:
         ),
     }
 
-    metadata_path = output_dir / "maze_navigation_simple_perceptron_baseline.json"
+    metadata_path = output_dir / "maze_navigation_simple_perceptron_balanced.json"
     metadata_path.write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
 
     print()
-    print("STEP05_SIMPLE_PERCEPTRON_BASELINE_COMPLETE")
+    print("STEP05_BALANCED_PERCEPTRON_COMPLETE")
     print(f"CV report : {report_path}")
     print(f"Model     : {model_path}")
     print(f"Metadata  : {metadata_path}")
     print()
     print(
-        "IMPORTANT: This is an unweighted baseline. Do not promote it to "
-        "robot control until fold/pooled left/right recall is reviewed."
+        "IMPORTANT: Compare this balanced result against the frozen unweighted "
+        "baseline before any shadow or robot-control promotion."
     )
     return 0
 
