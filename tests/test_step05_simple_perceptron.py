@@ -8,6 +8,7 @@ import numpy as np
 from src.step05_simple_perceptron.train_simple_perceptron import (
     EXPECTED_SHAPE,
     LABEL_TO_INDEX,
+    balanced_class_weights,
     confusion_matrix,
     load_session,
     metrics_from_confusion,
@@ -88,6 +89,59 @@ class Step05SimplePerceptronTests(unittest.TestCase):
 
             with self.assertRaisesRegex(RuntimeError, "Unexpected image shape"):
                 preprocess_image(path)
+
+    def test_balanced_class_weights_equalize_total_class_contribution(self):
+        y = np.asarray(
+            [0] * 8 + [1] * 2 + [2] * 2,
+            dtype=np.int32,
+        )
+
+        weights = balanced_class_weights(y)
+
+        self.assertEqual(weights.shape, (3,))
+        totals = np.asarray(
+            [
+                weights[0] * 8,
+                weights[1] * 2,
+                weights[2] * 2,
+            ],
+            dtype=np.float32,
+        )
+        self.assertTrue(np.allclose(totals, totals[0]))
+
+    def test_weighted_perceptron_accepts_balanced_weights_and_learns(self):
+        x = np.asarray(
+            [
+                [0.0, 0.0],
+                [0.1, 0.0],
+                [0.0, 0.1],
+                [0.1, 0.1],
+                [0.05, 0.0],
+                [0.0, 0.05],
+                [1.0, 0.0],
+                [0.9, 0.1],
+                [0.0, 1.0],
+                [0.1, 0.9],
+            ],
+            dtype=np.float32,
+        )
+        y = np.asarray([0, 0, 0, 0, 0, 0, 1, 1, 2, 2], dtype=np.int32)
+        class_weights = balanced_class_weights(y)
+
+        weights, bias, losses = train_perceptron(
+            x,
+            y,
+            epochs=500,
+            learning_rate=0.2,
+            l2=0.0,
+            seed=42,
+            class_weights=class_weights,
+        )
+
+        predictions = predict_labels(x, weights, bias)
+
+        self.assertEqual(predictions.tolist(), y.tolist())
+        self.assertLess(losses[-1], losses[0])
 
     def test_numpy_perceptron_learns_simple_three_class_problem(self):
         x = np.asarray(
