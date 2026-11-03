@@ -22,6 +22,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MOTION_PROFILE_PATH = REPO_ROOT / "config" / "motion_profile.json"
+CAPTURE_LABEL_SIGNAL = "step4_capture_label"
 
 
 def load_motion_profile(path: Path = MOTION_PROFILE_PATH) -> dict[str, float]:
@@ -105,11 +106,14 @@ def apply_motor_command_if_changed(
 
 
 def main():
-    print("STEP 4 DIAGNOSTIC - STEPPING ONLY")
+    print("STEP 4 DIAGNOSTIC - PERSISTENT LUA + SIGNAL WRITE ONLY")
     print("W - Forward; A - Curved left; D - Curved right.")
     print("Release keys (or press multiple W/A/D keys) to stop.")
     print("IMPORTANT: Open the maze and leave SIMULATION STOPPED.")
-    print("NO Lua script. NO string signals. NO camera/image calls.")
+    print("Persistent Lua script must already be stored in the loaded scene.")
+    print("Python writes ONE dynamic W/A/D label string signal.")
+    print("Persistent Lua does NOT read the signal in this test.")
+    print("NO runtime Lua creation/removal. NO camera/image calls.")
     print("Use terminal Ctrl+C to finish.")
 
     sim = None
@@ -120,6 +124,7 @@ def main():
     keyboard_state = KeyboardState()
     simulation_started = False
     stepping_enabled = False
+    last_capture_label = None
     exit_status = 0
 
     try:
@@ -138,7 +143,8 @@ def main():
         )
         print(
             "Diagnostic policy: event-driven keys + state-change-only motor writes "
-            "+ synchronized stepping; no Lua/signals/vision."
+            "+ synchronized stepping + one dynamic Python string-signal write; "
+            "persistent Lua is scene-owned and does not read the signal; no vision."
         )
 
         client = RemoteAPIClient()
@@ -161,6 +167,9 @@ def main():
         sim.startSimulation()
         simulation_started = True
 
+        sim.setStringSignal(CAPTURE_LABEL_SIGNAL, "")
+        last_capture_label = ""
+
         last_motor_command = apply_motor_command_if_changed(
             sim, left_motor, right_motor, 0.0, 0.0, last_motor_command
         )
@@ -168,15 +177,20 @@ def main():
         for _ in range(4):
             sim.step()
 
-        print("STEPPING_ONLY_PROBE_PASS")
-        print("READY_TO_DRIVE_STEPPING_ONLY")
+        print("PERSISTENT_SIGNAL_WRITE_PROBE_PASS")
+        print("READY_TO_DRIVE_PERSISTENT_SIGNAL_WRITE_ONLY")
 
         while True:
             loop_started = time.monotonic()
 
-            _, left_velocity, right_velocity = command_from_held_keys(
+            current_label, left_velocity, right_velocity = command_from_held_keys(
                 keyboard_state.snapshot(), profile
             )
+
+            normalized_label = current_label or ""
+            if normalized_label != last_capture_label:
+                sim.setStringSignal(CAPTURE_LABEL_SIGNAL, normalized_label)
+                last_capture_label = normalized_label
 
             last_motor_command = apply_motor_command_if_changed(
                 sim,
@@ -213,6 +227,11 @@ def main():
                 exit_status = 1
 
         if sim is not None:
+            try:
+                sim.setStringSignal(CAPTURE_LABEL_SIGNAL, "")
+            except Exception:
+                pass
+
             try:
                 if left_motor is not None and right_motor is not None:
                     last_motor_command = apply_motor_command_if_changed(
@@ -252,7 +271,7 @@ def main():
                 except Exception:
                     pass
 
-        print("STEPPING_ONLY_DIAGNOSTIC_FINISHED")
+        print("PERSISTENT_SIGNAL_WRITE_ONLY_DIAGNOSTIC_FINISHED")
 
     return exit_status
 
