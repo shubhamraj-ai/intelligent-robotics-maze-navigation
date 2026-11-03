@@ -22,7 +22,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MOTION_PROFILE_PATH = REPO_ROOT / "config" / "motion_profile.json"
-LUA_LIFECYCLE_SCRIPT_PATH = Path(__file__).with_name("lua_lifecycle_only.lua")
+LUA_LIFECYCLE_SCRIPT_PATH = Path(__file__).with_name("label_signal_only.lua")
+CAPTURE_LABEL_SIGNAL = "step4_capture_label"
 
 
 def load_motion_profile(path: Path = MOTION_PROFILE_PATH) -> dict[str, float]:
@@ -106,12 +107,13 @@ def apply_motor_command_if_changed(
 
 
 def main():
-    print("STEP 4 DIAGNOSTIC - LUA LIFECYCLE ONLY")
+    print("STEP 4 DIAGNOSTIC - LABEL SIGNAL ONLY")
     print("W - Forward; A - Curved left; D - Curved right.")
     print("Release keys (or press multiple W/A/D keys) to stop.")
     print("IMPORTANT: Open the maze and leave SIMULATION STOPPED.")
     print("Temporary Lua simulation script lifecycle ENABLED.")
-    print("NO string signals. NO camera/image calls.")
+    print("ONE dynamic W/A/D label string signal ENABLED.")
+    print("NO dataset/session signals. NO camera/image calls.")
     print("Use terminal Ctrl+C to finish.")
 
     sim = None
@@ -123,6 +125,7 @@ def main():
     simulation_started = False
     stepping_enabled = False
     lua_script_handle = None
+    last_capture_label = None
     exit_status = 0
 
     try:
@@ -141,7 +144,8 @@ def main():
         )
         print(
             "Diagnostic policy: event-driven keys + state-change-only motor writes "
-            "+ synchronized stepping + temporary Lua lifecycle; no signals/vision."
+            "+ synchronized stepping + temporary Lua lifecycle + one dynamic "
+            "label string signal; no dataset/session signals and no vision."
         )
 
         client = RemoteAPIClient()
@@ -167,17 +171,20 @@ def main():
             "lua",
         )
         if lua_script_handle < 0:
-            raise RuntimeError("CoppeliaSim could not create lifecycle-only Lua script")
+            raise RuntimeError("CoppeliaSim could not create label-signal-only Lua script")
         try:
-            sim.setObjectAlias(lua_script_handle, "Step4LuaLifecycleOnly")
+            sim.setObjectAlias(lua_script_handle, "Step4LabelSignalOnly")
         except Exception:
             pass
-        print("LUA_LIFECYCLE_SCRIPT_INSTALLED")
+        print("LABEL_SIGNAL_LUA_SCRIPT_INSTALLED")
 
         sim.setStepping(True)
         stepping_enabled = True
         sim.startSimulation()
         simulation_started = True
+
+        sim.setStringSignal(CAPTURE_LABEL_SIGNAL, "")
+        last_capture_label = ""
 
         last_motor_command = apply_motor_command_if_changed(
             sim, left_motor, right_motor, 0.0, 0.0, last_motor_command
@@ -186,15 +193,20 @@ def main():
         for _ in range(4):
             sim.step()
 
-        print("LUA_LIFECYCLE_STEPPING_PROBE_PASS")
-        print("READY_TO_DRIVE_LUA_LIFECYCLE_ONLY")
+        print("LABEL_SIGNAL_STEPPING_PROBE_PASS")
+        print("READY_TO_DRIVE_LABEL_SIGNAL_ONLY")
 
         while True:
             loop_started = time.monotonic()
 
-            _, left_velocity, right_velocity = command_from_held_keys(
+            current_label, left_velocity, right_velocity = command_from_held_keys(
                 keyboard_state.snapshot(), profile
             )
+
+            normalized_label = current_label or ""
+            if normalized_label != last_capture_label:
+                sim.setStringSignal(CAPTURE_LABEL_SIGNAL, normalized_label)
+                last_capture_label = normalized_label
 
             last_motor_command = apply_motor_command_if_changed(
                 sim,
@@ -231,6 +243,11 @@ def main():
                 exit_status = 1
 
         if sim is not None:
+            try:
+                sim.setStringSignal(CAPTURE_LABEL_SIGNAL, "")
+            except Exception:
+                pass
+
             try:
                 if left_motor is not None and right_motor is not None:
                     last_motor_command = apply_motor_command_if_changed(
@@ -279,7 +296,7 @@ def main():
                         file=sys.stderr,
                     )
 
-        print("LUA_LIFECYCLE_ONLY_DIAGNOSTIC_FINISHED")
+        print("LABEL_SIGNAL_ONLY_DIAGNOSTIC_FINISHED")
 
     return exit_status
 
