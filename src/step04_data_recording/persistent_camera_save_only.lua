@@ -1,6 +1,6 @@
 -- Persistent Step-4 diagnostic: stable label read + camera read + image save.
 -- Scene-owned script: no runtime creation/removal.
--- No sim.addLog calls, no dataset/session signals, no Python image transfer.
+-- No logging calls, no dataset/session signals, no Python image transfer.
 
 local LABEL_SIGNAL = 'step4_capture_label'
 local MIN_STABLE_SECONDS = 0.75
