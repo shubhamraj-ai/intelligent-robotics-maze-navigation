@@ -80,6 +80,32 @@ class Step06FrameHandoffTests(unittest.TestCase):
             self.assertEqual(record.frame_bgr.shape, (50, 50, 3))
             self.assertEqual(record.frame_bgr.dtype, np.uint8)
 
+    def test_frame_watcher_never_counts_same_filename_twice(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            watcher = JpegFrameWatcher(
+                root,
+                pattern="forward_*.jpg",
+                poll_seconds=0.001,
+                read_retry_seconds=0.001,
+            )
+
+            repeated = root / "forward_000001.jpg"
+            self.write_jpeg(repeated, 20)
+            first = watcher.wait_for_next(timeout_seconds=1.0)
+            self.assertEqual(first.path.name, repeated.name)
+
+            # Even if the same file is overwritten with new bytes/mtime, one
+            # filename must count as only one live observation in a run.
+            self.write_jpeg(repeated, 40)
+            with self.assertRaises(TimeoutError):
+                watcher.wait_for_next(timeout_seconds=0.01)
+
+            unique = root / "forward_000002.jpg"
+            self.write_jpeg(unique, 60)
+            second = watcher.wait_for_next(timeout_seconds=1.0)
+            self.assertEqual(second.path.name, unique.name)
+
     def test_frame_watcher_times_out_without_new_frame(self):
         with tempfile.TemporaryDirectory() as tmp:
             watcher = JpegFrameWatcher(

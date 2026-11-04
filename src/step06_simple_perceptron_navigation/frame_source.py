@@ -26,7 +26,7 @@ class FrameRecord:
 
 
 class JpegFrameWatcher:
-    """Yield only matching JPEG file versions that appear after watcher creation."""
+    """Yield each matching JPEG filename at most once after watcher creation."""
 
     def __init__(
         self,
@@ -53,8 +53,8 @@ class JpegFrameWatcher:
             raise ValueError("read_retry_seconds must be >= 0")
 
         self.frame_dir.mkdir(parents=True, exist_ok=True)
-        self._seen = {
-            self._signature(path)
+        self._seen_names = {
+            path.name
             for path in self.frame_dir.glob(self.pattern)
             if path.is_file()
         }
@@ -69,9 +69,9 @@ class JpegFrameWatcher:
         for path in self.frame_dir.glob(self.pattern):
             if not path.is_file():
                 continue
-            signature = self._signature(path)
-            if signature in self._seen:
+            if path.name in self._seen_names:
                 continue
+            signature = self._signature(path)
             candidates.append((signature, path))
 
         candidates.sort(
@@ -100,7 +100,7 @@ class JpegFrameWatcher:
                 if frame is None:
                     continue
 
-                self._seen.add(signature)
+                self._seen_names.add(path.name)
                 return FrameRecord(
                     path=path,
                     mtime_ns=signature[1],
