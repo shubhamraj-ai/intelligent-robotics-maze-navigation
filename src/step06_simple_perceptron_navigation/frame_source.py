@@ -1,8 +1,7 @@
 """File-based frame handoff for the active Step-6 path.
 
-CoppeliaSim writes JPEGs through a persistent scene-owned Lua script.
-Python only reads completed files from disk. This module contains no simulator
-camera API and sends no motor commands.
+The preferred live path reuses the proven Step-4 persistent scene-owned Lua
+capture script. Python only reads completed JPEG files from disk.
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ import cv2
 import numpy as np
 
 
-FRAME_GLOB = "step6_frame_*.jpg"
+DEFAULT_FRAME_GLOB = "forward_*.jpg"
 
 
 @dataclass(frozen=True)
@@ -27,21 +26,25 @@ class FrameRecord:
 
 
 class JpegFrameWatcher:
-    """Yield only JPEG file versions that appear after watcher creation."""
+    """Yield only matching JPEG file versions that appear after watcher creation."""
 
     def __init__(
         self,
         frame_dir: Path,
         *,
+        pattern: str = DEFAULT_FRAME_GLOB,
         poll_seconds: float = 0.05,
         read_retries: int = 5,
         read_retry_seconds: float = 0.05,
     ):
         self.frame_dir = Path(frame_dir)
+        self.pattern = str(pattern)
         self.poll_seconds = float(poll_seconds)
         self.read_retries = int(read_retries)
         self.read_retry_seconds = float(read_retry_seconds)
 
+        if not self.pattern or "/" in self.pattern or "\\" in self.pattern:
+            raise ValueError("pattern must be a simple filename glob")
         if self.poll_seconds <= 0:
             raise ValueError("poll_seconds must be > 0")
         if self.read_retries <= 0:
@@ -52,7 +55,7 @@ class JpegFrameWatcher:
         self.frame_dir.mkdir(parents=True, exist_ok=True)
         self._seen = {
             self._signature(path)
-            for path in self.frame_dir.glob(FRAME_GLOB)
+            for path in self.frame_dir.glob(self.pattern)
             if path.is_file()
         }
 
@@ -63,7 +66,7 @@ class JpegFrameWatcher:
 
     def _unseen_candidates(self):
         candidates = []
-        for path in self.frame_dir.glob(FRAME_GLOB):
+        for path in self.frame_dir.glob(self.pattern):
             if not path.is_file():
                 continue
             signature = self._signature(path)
@@ -110,7 +113,7 @@ class JpegFrameWatcher:
                 and time.monotonic() - started >= timeout_seconds
             ):
                 raise TimeoutError(
-                    f"No new Step-6 JPEG arrived in {self.frame_dir} "
+                    f"No new matching JPEG arrived in {self.frame_dir} "
                     f"within {timeout_seconds:.2f}s"
                 )
 

@@ -1,8 +1,7 @@
-"""Observation-only Step-6 frame-handoff monitor.
+"""Offline/decoupled Step-6 JPEG observation monitor.
 
-This is the first live qualification mode. It reads scene-owned JPEGs, runs the
-final simple perceptron, and prints predictions. It never connects to
-CoppeliaSim and therefore cannot actuate the robot.
+This tool never connects to CoppeliaSim. It is useful for local smoke tests or
+for monitoring files produced by another capture-enabling process.
 """
 
 from __future__ import annotations
@@ -17,16 +16,20 @@ from src.step06_simple_perceptron_navigation.core import (
     validate_step5_metadata,
     wheel_command_for_label,
 )
-from src.step06_simple_perceptron_navigation.frame_source import JpegFrameWatcher
+from src.step06_simple_perceptron_navigation.frame_source import (
+    DEFAULT_FRAME_GLOB,
+    JpegFrameWatcher,
+)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Observe scene-owned Step-6 JPEGs without motor actuation."
+        description="Observe Step-6 JPEGs without simulator or motor access."
     )
     parser.add_argument("--model", required=True, type=Path)
     parser.add_argument("--metadata", required=True, type=Path)
     parser.add_argument("--frame-dir", required=True, type=Path)
+    parser.add_argument("--frame-glob", default=DEFAULT_FRAME_GLOB)
     parser.add_argument("--max-frames", type=int, default=1)
     parser.add_argument("--timeout-seconds", type=float, default=15.0)
     return parser.parse_args()
@@ -42,6 +45,7 @@ def main() -> int:
     profile = load_locked_motion_profile()
     watcher = JpegFrameWatcher(
         args.frame_dir,
+        pattern=args.frame_glob,
         poll_seconds=profile["control_interval_seconds"],
     )
 

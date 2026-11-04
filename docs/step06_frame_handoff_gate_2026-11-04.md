@@ -1,110 +1,188 @@
-# Step 6 scene-owned frame-handoff gate — 2026-11-04
+# Step 6 exact Step-4 capture-reuse gate — 2026-11-04
 
 ## Purpose
 
-This checkpoint extends the active simple-perceptron Step-6 path while preserving the stable Step-4 camera isolation boundary.
+This checkpoint defines the first live Step-6 path while preserving the exact
+camera architecture that finally worked in Step 4.
 
 No AirGPU/CoppeliaSim live run was performed in this checkpoint.
 
-## Camera transport
+## Final capture decision
 
-New scene-owned Lua writer:
+The active Step-6 branch will NOT install a new camera writer for the first
+live qualification.
 
-`src/step06_simple_perceptron_navigation/step06_scene_frame_writer.lua`
+Instead it reuses the already validated Step-4 persistent scene-owned script:
 
-It preserves the proven Step-4 architecture:
+`src/step04_data_recording/persistent_camera_save_only.lua`
+
+That script is part of the tagged stable Step-4 line:
+
+`step4-stable-capture-2026-11-03`
+
+The stable script keeps:
 
 - persistent scene-owned Lua;
-- Lua resolves `/PioneerP3DX/cam1`;
-- Lua calls `sim.getVisionSensorImg`;
-- Lua calls `sim.saveImage`;
-- Python receives no image buffers from CoppeliaSim;
-- Python does not call camera APIs.
+- camera handle `/PioneerP3DX/cam1`;
+- `sim.getVisionSensorImg` inside Lua;
+- `sim.saveImage` inside Lua;
+- minimum stable signal duration: 0.75 s;
+- save interval: 2.00 s;
+- no Python camera-byte transfer;
+- no simIM;
+- no motor writes inside the camera script.
 
-Initial qualification constants are deliberately conservative and match the stable Step-4 capture timing:
+A temporary Step-6-specific Lua writer was developed during local design but
+was removed from the active branch before any live run because reusing the exact
+proven Step-4 script is the stricter preservation choice.
 
-- startup/stability delay: 0.75 s
-- JPEG save interval: 2.00 s
+## Capture enable bridge
 
-Do not reduce the save interval in the same experiment that introduces autonomous motor actuation.
+The stable Step-4 Lua script only saves while the small string signal
+`step4_capture_label` contains a known label.
 
-## Python frame handoff
+For Step 6, `capture_bridge.py` publishes the value `forward` strictly as a
+capture-enable token.
 
-`frame_source.py` watches only completed `step6_frame_*.jpg` files.
+This does NOT mean the Step-6 observation frame is a ground-truth forward
+training example.
 
-The watcher:
+Runtime Step-6 frames must never be re-finalized into the Step-5 training
+dataset merely because their filenames begin with `forward_`.
 
-- snapshots and ignores pre-existing files at startup;
-- treats a changed file version as new by name/mtime/size signature;
-- retries JPEG reads if a file is temporarily incomplete;
-- never deletes captured evidence;
-- contains no simulator or motor API.
+The bridge:
 
-## Observation-only first live mode
+- writes only the already-proven small string signal;
+- does not resolve the camera;
+- does not read camera bytes;
+- does not access motor handles;
+- does not start/stop the simulation.
 
-`frame_handoff_monitor.py` is physically separated from the motor adapter.
+## File watcher
+
+`frame_source.py` watches the existing stable-capture filenames:
+
+`forward_*.jpg`
 
 It:
 
-- loads the final H5/JSON contract;
-- watches new scene-owned JPEGs;
-- runs exact simple-perceptron NumPy inference;
-- prints the wheel command that *would* be used;
-- never imports RemoteAPIClient;
-- cannot command motors.
+- snapshots and ignores pre-existing files at startup;
+- treats a changed file version as new using name/mtime/size;
+- retries reads if a JPEG is temporarily incomplete;
+- never deletes captured evidence;
+- has no CoppeliaSim API.
 
-This is the required first AirGPU qualification mode.
+## Live observation-only wrapper
+
+`observe_existing_step4_capture.py` is the required first AirGPU Step-6 gate.
+
+It may connect to CoppeliaSim only to:
+
+- verify the simulation is running;
+- set/clear the proven `step4_capture_label` string signal.
+
+It never resolves:
+
+- left motor;
+- right motor;
+- camera.
+
+It never calls:
+
+- `setJointTargetVelocity`;
+- `getVisionSensorImg`;
+- `startSimulation`;
+- `stopSimulation`;
+- `setStepping`.
+
+It loads the final simple-perceptron H5, reads only new JPEG files saved by the
+existing Step-4 Lua script, and prints predictions plus the wheel command that
+would be used.
 
 ## Autonomous adapter
 
-`autonomous_navigation.py` exists for the later actuation gate but has not been run.
+`autonomous_navigation.py` exists for the later actuation gate but has not
+been run.
 
 It:
 
-- never accesses the camera;
+- uses the same existing Step-4 capture signal/script;
+- never touches the camera;
 - does not start/stop the simulation;
 - does not enable stepping;
-- uses only left/right motor object handles;
-- waits for a new scene-owned JPEG;
-- applies argmax prediction directly to the locked motion profile;
-- sends motor writes only when the velocity pair changes;
-- stops both motors on exit.
+- resolves only left/right motor handles;
+- uses argmax directly from the final simple perceptron;
+- maps labels to the locked 1.00 / 0.10 / 1.00 curved-turn motion profile;
+- suppresses duplicate motor writes;
+- stops motors and clears the capture signal on exit.
 
-It contains no confidence threshold, temporal smoothing, commitment timer, route-specific logic, ultrasonic logic, CNN, or TensorFlow runtime.
+There is no:
+
+- CNN;
+- TensorFlow runtime;
+- confidence threshold;
+- temporal smoothing;
+- turn commitment timer;
+- route-specific logic;
+- ultrasonic / Step-7 logic.
+
+## Model and motion validation
+
+The final H5/JSON artifacts were independently copied from Drive to Lenovo and
+verified by SHA-256.
+
+H5:
+
+`a2ffb9258ef3527b7deadf6d4c5d137b356d573ecfec621c207f84997d976751`
+
+JSON:
+
+`7a3d0fb11edcd63bba5f9301524016a9a0e79bf1fdf846a64d1fe139ab4f47e1`
+
+The active Step-6 core rejects any drift from:
+
+- forward speed = 1.00
+- turn outer speed = 1.00
+- turn inner speed = 0.10
+- control interval = 0.05 s
 
 ## Local validation
 
-Targeted frame-handoff tests:
+Final targeted capture-handoff tests:
 
-- 6 / 6 PASS
+- 9 / 9 PASS
 
-Complete repository test suite:
+Complete repository suite after exact Step-4 reuse revision:
 
-- 55 / 55 PASS
+- 58 / 58 PASS
 
-The full suite still includes and passes the Step-4 tests proving Python does not access the camera in the stable collection path.
+The full suite includes the historical/stable tests proving the Step-4 Python
+path does not access the camera.
 
-## Observation-monitor integration smoke
+## Decoupled monitor integration smoke
 
-The real final H5 was loaded.
+Using the real final H5 and the exact stable-capture filename pattern:
 
-A new official Step-4 JPEG was injected into the watcher *after* the monitor readiness marker.
+`forward_000001.jpg`
 
 Result:
 
 - monitor exit: 0
-- observation-only mode confirmed no simulator connection and no motor capability
+- no CoppeliaSim connection opened
+- no motor capability
 - prediction: forward
-- probabilities: forward=0.688168, left=0.298218, right=0.013613
-- would-command: (1.00, 1.00)
-
-The injected source image came from the left training folder. This single misclassification is consistent with the known imperfect turn recall and was investigated further below.
+- probabilities:
+  - forward=0.986107
+  - left=0.009684
+  - right=0.004210
+- would-command: left=1.00, right=1.00
 
 ## Final H5 full-training-set sanity check
 
-The exported final H5 was evaluated on all 385 official training images.
+All 385 official Step-4 images were evaluated through the exported H5.
 
-Confusion matrix (rows=true forward/left/right; cols=predicted forward/left/right):
+Confusion matrix
+(rows=true forward/left/right; cols=predicted forward/left/right):
 
 ```text
 [[312,  0,  1],
@@ -122,22 +200,22 @@ Recall:
 - left: 0.7500000000
 - right: 0.6388888889
 
-This is only a full-training-set sanity check. The leave-one-session-out Step-5 cross-validation remains the authoritative generalization evidence.
-
-The result confirms that the single observation-smoke error is not an H5/runtime corruption issue; the final model retains the previously documented turn-class limitations.
+This is only a full-training-set sanity check. The Step-5 leave-one-session-out
+cross-validation remains the authoritative generalization evidence.
 
 ## Next gate
 
-AirGPU is still OFF.
+AirGPU remains OFF.
 
-The next live experiment must be observation-only:
+The next live experiment is observation-only:
 
-1. use the stable maze/robot/camera scene;
-2. install/use the persistent Step-6 Lua frame writer without changing camera or motion parameters;
-3. keep motors stationary;
-4. run `frame_handoff_monitor.py` only;
-5. verify multiple scene-owned JPEGs arrive without simulator instability;
-6. verify model predictions/log output;
-7. stop and review before any autonomous motor actuation.
+1. use the same stable maze/robot/camera scene that contains the validated
+   persistent Step-4 Lua capture script;
+2. do not alter the motion profile;
+3. start the simulation with the robot stationary;
+4. run `observe_existing_step4_capture.py` for a small bounded number of frames;
+5. verify JPEG creation remains stable;
+6. verify predictions are produced;
+7. clear the capture signal and stop/review.
 
-Only after that observation-only gate passes should the autonomous adapter be considered.
+No autonomous motor actuation should occur until that gate passes.
