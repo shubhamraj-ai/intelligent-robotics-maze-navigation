@@ -39,7 +39,7 @@ class Step06PulseQualificationTests(unittest.TestCase):
     def test_pulse_qualification_preserves_camera_isolation(self):
         source = MODULE_PATH.read_text(encoding="utf-8").lower()
 
-        self.assertIn("time.sleep(pulse_seconds)", source)
+        self.assertIn("time.sleep(active_pulse_seconds)", source)
         self.assertIn("stop_motors", source)
         self.assertIn("enable_existing_step4_capture", source)
         self.assertIn("/pioneerp3dx/leftmotor", source)
@@ -51,6 +51,22 @@ class Step06PulseQualificationTests(unittest.TestCase):
         self.assertNotIn("stopsimulation", source)
         self.assertNotIn("setstepping", source)
         self.assertNotIn("tensorflow", source)
+
+    def test_forward_only_acceleration_preserves_turn_duration(self):
+        module = load_module()
+
+        self.assertEqual(
+            module.pulse_seconds_for_label("forward", 0.25, 0.50),
+            0.50,
+        )
+        self.assertEqual(
+            module.pulse_seconds_for_label("left", 0.25, 0.50),
+            0.25,
+        )
+        self.assertEqual(
+            module.pulse_seconds_for_label("right", 0.25, 0.50),
+            0.25,
+        )
 
     def test_stop_on_first_turn_guard(self):
         module = load_module()

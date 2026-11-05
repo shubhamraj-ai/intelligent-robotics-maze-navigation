@@ -56,6 +56,18 @@ def validate_pulse_seconds(value: float) -> float:
     return value
 
 
+def pulse_seconds_for_label(
+    label: str,
+    turn_pulse_seconds: float,
+    forward_pulse_seconds: float,
+) -> float:
+    return (
+        float(forward_pulse_seconds)
+        if label == "forward"
+        else float(turn_pulse_seconds)
+    )
+
+
 def should_stop_after_label(label: str, stop_on_turn: bool) -> bool:
     return bool(stop_on_turn and label in {"left", "right"})
 
@@ -73,6 +85,16 @@ def parse_args() -> argparse.Namespace:
         "--pulse-seconds",
         type=float,
         default=DEFAULT_PULSE_SECONDS,
+        help="Default bounded pulse duration for all labels.",
+    )
+    parser.add_argument(
+        "--forward-pulse-seconds",
+        type=float,
+        default=None,
+        help=(
+            "Optional forward-only pulse duration. "
+            "Left/right remain on --pulse-seconds."
+        ),
     )
     parser.add_argument("--timeout-seconds", type=float, default=15.0)
     parser.add_argument(
@@ -89,6 +111,11 @@ def main() -> int:
     if args.max_pulses <= 0:
         raise ValueError("--max-pulses must be > 0")
     pulse_seconds = validate_pulse_seconds(args.pulse_seconds)
+    forward_pulse_seconds = (
+        pulse_seconds
+        if args.forward_pulse_seconds is None
+        else validate_pulse_seconds(args.forward_pulse_seconds)
+    )
 
     metadata = validate_step5_metadata(args.metadata)
     model = load_dense_softmax_h5(args.model)
@@ -159,8 +186,9 @@ def main() -> int:
         print("STEP6_PULSE_ACTUATION_READY")
         print("Camera source: unchanged persistent Step-4 Lua save-only path.")
         print(
-            "Qualification pulse: "
-            f"{pulse_seconds:.2f}s; maximum permitted="
+            "Qualification pulses: "
+            f"forward={forward_pulse_seconds:.2f}s; "
+            f"left/right={pulse_seconds:.2f}s; maximum permitted="
             f"{MAX_QUALIFICATION_PULSE_SECONDS:.2f}s."
         )
         print("Robot is stopped between every fresh-frame decision.")
@@ -184,6 +212,11 @@ def main() -> int:
                 label,
                 profile,
             )
+            active_pulse_seconds = pulse_seconds_for_label(
+                label,
+                pulse_seconds,
+                forward_pulse_seconds,
+            )
 
             last_command = apply_motor_command_if_changed(
                 sim,
@@ -194,7 +227,7 @@ def main() -> int:
                 last_command,
             )
 
-            time.sleep(pulse_seconds)
+            time.sleep(active_pulse_seconds)
 
             last_command = apply_motor_command_if_changed(
                 sim,
@@ -217,7 +250,7 @@ def main() -> int:
                 f"PULSE {index}: {record.path.name} -> {label}; "
                 f"{probability_text}; "
                 f"command=({left_velocity:.2f},{right_velocity:.2f}); "
-                f"duration={pulse_seconds:.2f}s; STOPPED; "
+                f"duration={active_pulse_seconds:.2f}s; STOPPED; "
                 f"pose=({float(position[0]):.4f},{float(position[1]):.4f},"
                 f"{float(position[2]):.4f}); yaw={float(orientation[2]):.4f}"
             )
@@ -230,7 +263,7 @@ def main() -> int:
                     label,
                     f"{left_velocity:.6f}",
                     f"{right_velocity:.6f}",
-                    f"{pulse_seconds:.6f}",
+                    f"{active_pulse_seconds:.6f}",
                     "true",
                     f"{float(position[0]):.9f}",
                     f"{float(position[1]):.9f}",
