@@ -56,6 +56,10 @@ def validate_pulse_seconds(value: float) -> float:
     return value
 
 
+def should_stop_after_label(label: str, stop_on_turn: bool) -> bool:
+    return bool(stop_on_turn and label in {"left", "right"})
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run bounded simple-perceptron motor pulses from fresh JPEGs."
@@ -71,6 +75,11 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_PULSE_SECONDS,
     )
     parser.add_argument("--timeout-seconds", type=float, default=15.0)
+    parser.add_argument(
+        "--stop-on-turn",
+        action="store_true",
+        help="Exit cleanly immediately after the first bounded left/right pulse.",
+    )
     parser.add_argument("--log-csv", required=True, type=Path)
     return parser.parse_args()
 
@@ -205,6 +214,13 @@ def main() -> int:
                 ]
             )
             log_handle.flush()
+
+            if should_stop_after_label(label, args.stop_on_turn):
+                print(
+                    "STEP6_FIRST_TURN_DETECTED "
+                    f"pulse={index} label={label} frame={record.path.name}"
+                )
+                break
 
     except KeyboardInterrupt:
         print("STEP6_PULSE_ACTUATION_INTERRUPTED")

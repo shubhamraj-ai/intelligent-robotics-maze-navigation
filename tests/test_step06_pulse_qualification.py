@@ -52,6 +52,15 @@ class Step06PulseQualificationTests(unittest.TestCase):
         self.assertNotIn("setstepping", source)
         self.assertNotIn("tensorflow", source)
 
+    def test_stop_on_first_turn_guard(self):
+        module = load_module()
+
+        self.assertFalse(module.should_stop_after_label("forward", True))
+        self.assertTrue(module.should_stop_after_label("left", True))
+        self.assertTrue(module.should_stop_after_label("right", True))
+        self.assertFalse(module.should_stop_after_label("left", False))
+        self.assertFalse(module.should_stop_after_label("right", False))
+
 
 if __name__ == "__main__":
     unittest.main()
