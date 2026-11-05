@@ -77,6 +77,15 @@ class Step06PulseQualificationTests(unittest.TestCase):
         self.assertFalse(module.should_stop_after_label("left", False))
         self.assertFalse(module.should_stop_after_label("right", False))
 
+    def test_bounded_post_turn_stop_guard(self):
+        module = load_module()
+
+        self.assertFalse(module.should_stop_after_post_turn(72, None, 6))
+        self.assertFalse(module.should_stop_after_post_turn(72, 72, 6))
+        self.assertFalse(module.should_stop_after_post_turn(77, 72, 6))
+        self.assertTrue(module.should_stop_after_post_turn(78, 72, 6))
+        self.assertFalse(module.should_stop_after_post_turn(90, 72, 0))
+
     def test_pose_is_diagnostics_only(self):
         source = MODULE_PATH.read_text(encoding="utf-8").lower()
 

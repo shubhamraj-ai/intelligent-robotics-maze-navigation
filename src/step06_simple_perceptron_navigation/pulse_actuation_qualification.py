@@ -72,6 +72,18 @@ def should_stop_after_label(label: str, stop_on_turn: bool) -> bool:
     return bool(stop_on_turn and label in {"left", "right"})
 
 
+def should_stop_after_post_turn(
+    index: int,
+    first_turn_pulse: int | None,
+    post_turn_pulses: int,
+) -> bool:
+    return bool(
+        first_turn_pulse is not None
+        and post_turn_pulses > 0
+        and index >= first_turn_pulse + post_turn_pulses
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run bounded simple-perceptron motor pulses from fresh JPEGs."
@@ -102,6 +114,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Exit cleanly immediately after the first bounded left/right pulse.",
     )
+    parser.add_argument(
+        "--post-turn-pulses",
+        type=int,
+        default=0,
+        help=(
+            "After the first left/right decision, continue for this many "
+            "additional fresh-frame pulses before exiting. "
+            "Cannot be combined with --stop-on-turn."
+        ),
+    )
     parser.add_argument("--log-csv", required=True, type=Path)
     return parser.parse_args()
 
@@ -110,6 +132,12 @@ def main() -> int:
     args = parse_args()
     if args.max_pulses <= 0:
         raise ValueError("--max-pulses must be > 0")
+    if args.post_turn_pulses < 0:
+        raise ValueError("--post-turn-pulses must be >= 0")
+    if args.stop_on_turn and args.post_turn_pulses:
+        raise ValueError(
+            "--stop-on-turn cannot be combined with --post-turn-pulses"
+        )
     pulse_seconds = validate_pulse_seconds(args.pulse_seconds)
     forward_pulse_seconds = (
         pulse_seconds
@@ -156,6 +184,7 @@ def main() -> int:
     right_motor = None
     last_command = None
     completed = 0
+    first_turn_pulse = None
 
     try:
         client = RemoteAPIClient()
@@ -193,6 +222,12 @@ def main() -> int:
         )
         print("Robot is stopped between every fresh-frame decision.")
         print("Pose is logged for diagnostics only and never used for control.")
+        if args.post_turn_pulses:
+            print(
+                "Turn-continuation gate: "
+                f"{args.post_turn_pulses} additional fresh decisions after "
+                "the first left/right prediction."
+            )
         print("No confidence threshold, smoothing, commitment timer, or route logic.")
 
         start_position = sim.getObjectPosition(robot, sim.handle_world)
@@ -273,10 +308,26 @@ def main() -> int:
             )
             log_handle.flush()
 
-            if should_stop_after_label(label, args.stop_on_turn):
+            if label in {"left", "right"} and first_turn_pulse is None:
+                first_turn_pulse = index
                 print(
                     "STEP6_FIRST_TURN_DETECTED "
                     f"pulse={index} label={label} frame={record.path.name}"
+                )
+
+            if should_stop_after_label(label, args.stop_on_turn):
+                break
+
+            if should_stop_after_post_turn(
+                index,
+                first_turn_pulse,
+                args.post_turn_pulses,
+            ):
+                print(
+                    "STEP6_TURN_CONTINUATION_COMPLETE "
+                    f"first_turn_pulse={first_turn_pulse} "
+                    f"final_pulse={index} "
+                    f"post_turn_pulses={args.post_turn_pulses}"
                 )
                 break
 
