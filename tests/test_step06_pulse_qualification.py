@@ -61,6 +61,21 @@ class Step06PulseQualificationTests(unittest.TestCase):
         self.assertFalse(module.should_stop_after_label("left", False))
         self.assertFalse(module.should_stop_after_label("right", False))
 
+    def test_pose_is_diagnostics_only(self):
+        source = MODULE_PATH.read_text(encoding="utf-8").lower()
+
+        self.assertIn("getobjectposition", source)
+        self.assertIn("getobjectorientation", source)
+        self.assertIn("pose is logged for diagnostics only", source)
+        self.assertIn("wheel_command_for_label", source)
+
+        # Pose values are logged/printed, not used to choose a label or wheel command.
+        self.assertNotIn("wheel_command_for_pose", source)
+        self.assertNotIn("label_from_pose", source)
+        self.assertNotIn("position[0] >", source)
+        self.assertNotIn("position[1] >", source)
+        self.assertNotIn("orientation[2] >", source)
+
 
 if __name__ == "__main__":
     unittest.main()

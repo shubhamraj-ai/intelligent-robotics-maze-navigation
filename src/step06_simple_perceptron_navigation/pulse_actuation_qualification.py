@@ -117,6 +117,10 @@ def main() -> int:
             "right_velocity",
             "pulse_seconds",
             "motors_stopped_after_pulse",
+            "robot_x",
+            "robot_y",
+            "robot_z",
+            "robot_yaw",
         ]
     )
 
@@ -135,10 +139,11 @@ def main() -> int:
                 "Simulation is stopped. Start the unchanged stable scene first."
             )
 
+        robot = sim.getObject("/PioneerP3DX")
         left_motor = sim.getObject("/PioneerP3DX/leftMotor")
         right_motor = sim.getObject("/PioneerP3DX/rightMotor")
-        if min(left_motor, right_motor) < 0:
-            raise RuntimeError("Could not resolve PioneerP3DX motor objects")
+        if min(robot, left_motor, right_motor) < 0:
+            raise RuntimeError("Could not resolve PioneerP3DX robot/motor objects")
 
         last_command = apply_motor_command_if_changed(
             sim,
@@ -159,7 +164,18 @@ def main() -> int:
             f"{MAX_QUALIFICATION_PULSE_SECONDS:.2f}s."
         )
         print("Robot is stopped between every fresh-frame decision.")
+        print("Pose is logged for diagnostics only and never used for control.")
         print("No confidence threshold, smoothing, commitment timer, or route logic.")
+
+        start_position = sim.getObjectPosition(robot, sim.handle_world)
+        start_orientation = sim.getObjectOrientation(robot, sim.handle_world)
+        print(
+            "START_POSE "
+            f"x={float(start_position[0]):.6f} "
+            f"y={float(start_position[1]):.6f} "
+            f"z={float(start_position[2]):.6f} "
+            f"yaw={float(start_orientation[2]):.6f}"
+        )
 
         for index in range(1, args.max_pulses + 1):
             record = watcher.wait_for_next(timeout_seconds=args.timeout_seconds)
@@ -190,6 +206,9 @@ def main() -> int:
             )
             completed += 1
 
+            position = sim.getObjectPosition(robot, sim.handle_world)
+            orientation = sim.getObjectOrientation(robot, sim.handle_world)
+
             probability_text = ", ".join(
                 f"{name}={float(value):.6f}"
                 for name, value in zip(metadata["labels"], probabilities)
@@ -198,7 +217,9 @@ def main() -> int:
                 f"PULSE {index}: {record.path.name} -> {label}; "
                 f"{probability_text}; "
                 f"command=({left_velocity:.2f},{right_velocity:.2f}); "
-                f"duration={pulse_seconds:.2f}s; STOPPED"
+                f"duration={pulse_seconds:.2f}s; STOPPED; "
+                f"pose=({float(position[0]):.4f},{float(position[1]):.4f},"
+                f"{float(position[2]):.4f}); yaw={float(orientation[2]):.4f}"
             )
 
             log_writer.writerow(
@@ -211,6 +232,10 @@ def main() -> int:
                     f"{right_velocity:.6f}",
                     f"{pulse_seconds:.6f}",
                     "true",
+                    f"{float(position[0]):.9f}",
+                    f"{float(position[1]):.9f}",
+                    f"{float(position[2]):.9f}",
+                    f"{float(orientation[2]):.9f}",
                 ]
             )
             log_handle.flush()
