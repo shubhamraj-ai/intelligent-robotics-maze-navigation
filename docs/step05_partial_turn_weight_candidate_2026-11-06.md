@@ -139,14 +139,43 @@ Test status after experimental runtime support:
 - targeted Step-6 tests: 17/17 PASS;
 - complete repository suite: 67/67 PASS.
 
+## AirGPU failed-second-corner replay
+
+The exact 104 JPEGs from the failed second-corner run were preserved before any
+new live test.
+
+Offline replay results:
+
+- baseline counts: forward=91, left=13, right=0;
+- candidate counts: forward=75, left=25, right=4;
+- baseline longest left run: 10 frames;
+- candidate longest left run: 17 frames;
+- baseline first sustained left run: pulse 72 through pulse 81;
+- candidate first sustained left run: pulse 71 through pulse 87.
+
+The candidate changed 16 labels relative to the baseline. In particular, frames
+82-87 changed from baseline forward to candidate left, directly addressing the
+observed early reversion to forward during the failed corner sequence.
+
+The candidate also predicted right on baseline-trajectory frames 101-104. Those
+late predictions are **not** treated as proof of unsafe live right steering
+because the candidate would already have produced a different trajectory from
+pulse 71 onward. Therefore, frames late in the baseline trajectory are
+counterfactual and cannot establish the candidate's eventual live viewpoint.
+
+The replay used no simulator connection and sent no motor commands.
+
 ## Promotion rule
 
-Do not promote M=2.5 based on offline metrics alone.
+Do not promote M=2.5 based on offline metrics or replay alone.
 
 Next:
-1. copy the preserved second-corner live evidence from AirGPU;
-2. compare current-final vs M=2.5 predictions on those exact live frames;
-3. only if the candidate improves the failed turn sequence without creating
-   obvious premature-turn behavior, perform a bounded AirGPU live
-   second-corner qualification;
-4. preserve the current final model until that live gate passes.
+1. retain the unweighted model as the authoritative final model;
+2. run one bounded live AirGPU qualification of M=2.5 using the unchanged
+   Step-4 capture path, unchanged 1.00/0.10/1.00 wheel profile, and unchanged
+   0.50 s forward/turn pulse durations;
+3. keep visual human supervision and stop manually if the robot approaches a
+   wall unexpectedly;
+4. compare first-corner completion, second-corner left persistence, collision
+   outcome, and post-corner return-to-forward behavior;
+5. only consider promotion after that live gate passes.
