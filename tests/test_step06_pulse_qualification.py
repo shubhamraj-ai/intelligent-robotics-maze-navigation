@@ -86,6 +86,20 @@ class Step06PulseQualificationTests(unittest.TestCase):
         self.assertTrue(module.should_stop_after_post_turn(78, 72, 6))
         self.assertFalse(module.should_stop_after_post_turn(90, 72, 0))
 
+    def test_experimental_candidate_requires_explicit_opt_in(self):
+        source = MODULE_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("--experimental-turn-multiplier", source)
+        self.assertIn(
+            "validate_step5_experimental_candidate_metadata",
+            source,
+        )
+        self.assertIn(
+            "MODEL_STATUS: selected final unweighted model.",
+            source,
+        )
+        self.assertIn("EXPERIMENTAL_MODEL:", source)
+
     def test_pose_is_diagnostics_only(self):
         source = MODULE_PATH.read_text(encoding="utf-8").lower()
 

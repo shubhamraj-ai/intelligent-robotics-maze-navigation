@@ -31,6 +31,7 @@ from src.step06_simple_perceptron_navigation.core import (
     load_locked_motion_profile,
     predict_bgr_frame,
     stop_motors,
+    validate_step5_experimental_candidate_metadata,
     validate_step5_metadata,
     wheel_command_for_label,
 )
@@ -90,6 +91,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--model", required=True, type=Path)
     parser.add_argument("--metadata", required=True, type=Path)
+    parser.add_argument(
+        "--experimental-turn-multiplier",
+        type=float,
+        default=None,
+        help=(
+            "Explicitly opt into a partial-turn-weight experimental candidate. "
+            "Default behavior remains pinned to the selected final model."
+        ),
+    )
     parser.add_argument("--frame-dir", required=True, type=Path)
     parser.add_argument("--frame-glob", default=DEFAULT_FRAME_GLOB)
     parser.add_argument("--max-pulses", type=int, default=3)
@@ -145,7 +155,16 @@ def main() -> int:
         else validate_pulse_seconds(args.forward_pulse_seconds)
     )
 
-    metadata = validate_step5_metadata(args.metadata)
+    if args.experimental_turn_multiplier is None:
+        metadata = validate_step5_metadata(args.metadata)
+        experimental_candidate = False
+    else:
+        metadata = validate_step5_experimental_candidate_metadata(
+            args.metadata,
+            expected_turn_multiplier=args.experimental_turn_multiplier,
+        )
+        experimental_candidate = True
+
     model = load_dense_softmax_h5(args.model)
     profile = load_locked_motion_profile()
 
@@ -213,6 +232,14 @@ def main() -> int:
         enable_existing_step4_capture(sim)
 
         print("STEP6_PULSE_ACTUATION_READY")
+        if experimental_candidate:
+            print(
+                "EXPERIMENTAL_MODEL: partial turn weighting "
+                f"{args.experimental_turn_multiplier:.2f}x; "
+                "not promoted to final."
+            )
+        else:
+            print("MODEL_STATUS: selected final unweighted model.")
         print("Camera source: unchanged persistent Step-4 Lua save-only path.")
         print(
             "Qualification pulses: "

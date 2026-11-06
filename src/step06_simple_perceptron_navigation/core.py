@@ -171,6 +171,74 @@ def validate_step5_metadata(path: Path) -> dict:
     return metadata
 
 
+def validate_step5_experimental_candidate_metadata(
+    path: Path,
+    *,
+    expected_turn_multiplier: float,
+) -> dict:
+    """Validate an explicitly opt-in partial-turn-weight Step-5 candidate."""
+    path = Path(path)
+    metadata = json.loads(path.read_text(encoding="utf-8"))
+
+    if metadata.get("architecture") != "2500 -> Dense(3, softmax)":
+        raise ValueError("Unexpected candidate model architecture")
+    if tuple(metadata.get("labels", [])) != LABELS:
+        raise ValueError("Unexpected candidate label ordering")
+    if tuple(metadata.get("input_image_shape", [])) != MODEL_IMAGE_SHAPE:
+        raise ValueError("Unexpected candidate input image shape")
+    if metadata.get("preprocessing") != (
+        "OpenCV BGR2GRAY -> float32 /255 -> flatten 2500"
+    ):
+        raise ValueError("Unexpected candidate preprocessing contract")
+
+    config = metadata.get("config", {})
+    fixed_expected = {
+        "epochs": 3200,
+        "learning_rate": 0.01,
+        "l2": 0.0001,
+        "seed": 42,
+        "class_weighting": "partial_turn_multiplier",
+    }
+    for key, expected_value in fixed_expected.items():
+        if config.get(key) != expected_value:
+            raise ValueError(
+                f"Unexpected candidate config {key}: "
+                f"{config.get(key)!r} != {expected_value!r}"
+            )
+
+    multiplier = float(config.get("turn_multiplier", float("nan")))
+    if not math.isclose(
+        multiplier,
+        float(expected_turn_multiplier),
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    ):
+        raise ValueError(
+            "Unexpected candidate turn multiplier: "
+            f"{multiplier} != {expected_turn_multiplier}"
+        )
+
+    expected_weights = {
+        "forward": 1.0,
+        "left": float(expected_turn_multiplier),
+        "right": float(expected_turn_multiplier),
+    }
+    actual_weights = config.get("class_weights", {})
+    if actual_weights != expected_weights:
+        raise ValueError(
+            f"Unexpected candidate class weights: "
+            f"{actual_weights} != {expected_weights}"
+        )
+
+    counts = metadata.get("training_counts", {})
+    if counts != {"forward": 313, "left": 36, "right": 36}:
+        raise ValueError(f"Unexpected candidate training counts: {counts}")
+    if metadata.get("training_total") != 385:
+        raise ValueError("Unexpected candidate training total; expected 385")
+
+    return metadata
+
+
 def preprocess_bgr_frame(frame: np.ndarray) -> np.ndarray:
     """Reproduce Step-5 preprocessing for one OpenCV BGR frame."""
     frame = np.asarray(frame)

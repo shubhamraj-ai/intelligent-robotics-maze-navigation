@@ -258,6 +258,53 @@ class Step06SimplePerceptronTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Unexpected final Step-5 config"):
                 core.validate_step5_metadata(path)
 
+    def test_experimental_candidate_metadata_requires_explicit_multiplier(self):
+        candidate = {
+            "model_file": "candidate.h5",
+            "architecture": "2500 -> Dense(3, softmax)",
+            "labels": ["forward", "left", "right"],
+            "config": {
+                "epochs": 3200,
+                "learning_rate": 0.01,
+                "l2": 0.0001,
+                "seed": 42,
+                "class_weighting": "partial_turn_multiplier",
+                "turn_multiplier": 2.5,
+                "class_weights": {
+                    "forward": 1.0,
+                    "left": 2.5,
+                    "right": 2.5,
+                },
+            },
+            "preprocessing": "OpenCV BGR2GRAY -> float32 /255 -> flatten 2500",
+            "input_image_shape": [50, 50, 3],
+            "training_counts": {"forward": 313, "left": 36, "right": 36},
+            "training_total": 385,
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "candidate.json"
+            path.write_text(json.dumps(candidate), encoding="utf-8")
+
+            loaded = core.validate_step5_experimental_candidate_metadata(
+                path,
+                expected_turn_multiplier=2.5,
+            )
+            self.assertEqual(loaded["config"]["turn_multiplier"], 2.5)
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "Unexpected candidate turn multiplier",
+            ):
+                core.validate_step5_experimental_candidate_metadata(
+                    path,
+                    expected_turn_multiplier=3.0,
+                )
+
+            # The default final-model validator must still reject the candidate.
+            with self.assertRaisesRegex(ValueError, "Unexpected final Step-5 config"):
+                core.validate_step5_metadata(path)
+
 
 if __name__ == "__main__":
     unittest.main()
