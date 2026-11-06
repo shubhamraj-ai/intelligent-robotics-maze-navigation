@@ -165,17 +165,43 @@ counterfactual and cannot establish the candidate's eventual live viewpoint.
 
 The replay used no simulator connection and sent no motor commands.
 
-## Promotion rule
+## Bounded live 2.5x candidate result
 
-Do not promote M=2.5 based on offline metrics or replay alone.
+A bounded live qualification was run with all non-model variables held fixed:
+
+- unchanged stable Step-4 Lua save-only capture path;
+- unchanged 1.00 / 0.10 / 1.00 wheel profile;
+- unchanged 0.50 s forward and turn pulses;
+- motors stopped after every pulse;
+- no confidence threshold, smoothing, route logic, pose steering, or CNN.
+
+The first corridor and first left corner were completed cleanly. The candidate
+produced a sustained left run at pulses 70-79 and then returned to forward.
+
+At the second left corner the model became unstable. From pulse 96 onward the
+predicted labels repeatedly alternated between left and right. Thirteen of the
+17 decisions from pulses 96-112 had a top-two softmax margin below 0.10. The
+human visual observation was that the robot oscillated left/right at the second
+corner and ultimately collided with the wall ahead.
+
+This means the remaining failure is primarily a classification/data-coverage
+problem at the second-corner visual states, not a demonstrated need for longer
+motor pulses. The 2.5x candidate is therefore **not promoted**.
+
+## Promotion rule and next experiment
+
+Retain the original 385-image dataset, the unweighted selected-final model, and
+all stable Step-4/Step-5 checkpoints unchanged.
 
 Next:
-1. retain the unweighted model as the authoritative final model;
-2. run one bounded live AirGPU qualification of M=2.5 using the unchanged
-   Step-4 capture path, unchanged 1.00/0.10/1.00 wheel profile, and unchanged
-   0.50 s forward/turn pulse durations;
-3. keep visual human supervision and stop manually if the robot approaches a
-   wall unexpectedly;
-4. compare first-corner completion, second-corner left persistence, collision
-   outcome, and post-corner return-to-forward behavior;
-5. only consider promotion after that live gate passes.
+1. collect a separate targeted augmentation dataset using clean human W/A/D
+   demonstrations through the first and second corners;
+2. record labels from the actual manual command, with one command held cleanly
+   at a time and no overlapping W/A/D keys;
+3. prioritize the second-corner approach, left-turn initiation, sustained left
+   turn, and post-turn return-to-forward states;
+4. keep the new data isolated from the original dataset until validation;
+5. retrain and compare unweighted and modest partial-weight variants offline
+   before any further live candidate run;
+6. do not increase pulse duration and do not run unrestricted
+   autonomous_navigation.py.
