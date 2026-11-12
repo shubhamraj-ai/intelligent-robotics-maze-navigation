@@ -1,6 +1,6 @@
-﻿# Intelligent Robotics Maze Navigation
+# Intelligent Robotics Maze Navigation
 
-University of Aberdeen â€” EG506P Intelligent Robotics for Energy Infrastructure  
+University of Aberdeen - EG506P Intelligent Robotics for Energy Infrastructure  
 Design Project technical archive.
 
 This repository presents the final submission artefacts and compact validation evidence for a PioneerP3DX maze-navigation system in CoppeliaSim.
@@ -17,15 +17,17 @@ This percentage is action agreement, not held-out classification accuracy.
 
 ## Repository structure
 
-- final-deliverables/ â€” frozen seven technical deliverables used for the project submission.
-- scenes/ â€” original maze and Step-7 ultrasonic-sensor scene used for reproducibility/testing.
-- baselines/golden/ â€” first preserved successful full autonomous-navigation evidence.
-- baselines/diamond/ â€” ultrasonic/mapping-capable preserved baseline and Step-7 evidence.
-- baselines/platinum/ â€” simplified traversal baseline that exposed a turn-state bookkeeping issue near the terminal region.
-- baselines/platinum-v2/ â€” corrected simplified baseline that recognised the NN-executed fourth right turn and achieved clean terminal stopping.
-- evidence/ â€” compact final validation and robot-control stability evidence.
+- final-deliverables/ - frozen seven technical deliverables used for the project submission.
+- scenes/ - original maze and Step-7 ultrasonic-sensor scene used for reproducibility/testing.
+- baselines/golden/ - first preserved successful full autonomous-navigation evidence.
+- baselines/diamond/ - ultrasonic/mapping-capable preserved baseline and Step-7 evidence.
+- baselines/platinum/ - simplified traversal baseline that exposed a turn-state bookkeeping issue near the terminal region.
+- baselines/platinum-v2/ - corrected simplified baseline that recognised the NN-executed fourth right turn and achieved clean terminal stopping.
+- evidence/ - compact final validation and robot-control stability evidence.
 
-The previous development-era repository state (including CNN experiments and older datasets) is preserved in branch legacy-development-2026-11-13.
+The previous development-era repository states are preserved in the legacy branches:
+- legacy-development-2026-11-13
+- legacy-development-main-2026-11-13
 
 ## Milestone summary
 
@@ -45,10 +47,10 @@ Corrected state interpretation rather than adding another forced turn. The clean
 
 The final submitted network is a simple perceptron-style classifier, not a CNN. The final dataset contains 426 labelled 50 x 50 images. The final ultrasonic dataset contains 499 pose/range samples. The final MATLAB script reconstructs wall points from fixed sensor mounting geometry plus recorded robot pose and valid sensor distances.
 
-## Citation
+## Citation and access
 
-For the project report, cite the stable technical archive or the exact commit used for the report. A CITATION.cff file is included so GitHub can provide a formatted citation.
+A CITATION.cff file and REPORT_CITATION_GUIDE.md are included. The repository is currently private. Before using it as a marker-accessible reference, either grant the marker access or publish an approved evidence-only version that does not expose course material that should remain private.
 
 ## Historical preservation
 
-Cleaning main does not erase earlier development history. Git history and the legacy-development-2026-11-13 branch retain the pre-archive repository state.
+Cleaning main did not erase earlier development history. Git history and the two legacy branches retain the pre-archive development states.

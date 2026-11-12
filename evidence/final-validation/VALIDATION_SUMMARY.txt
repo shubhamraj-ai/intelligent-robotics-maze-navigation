@@ -1,12 +1,15 @@
-﻿FINAL TECHNICAL PACKAGE VALIDATION - 2026-11-11
-Final submission folder contains exactly 7 files and 0 directories.
-navigation.py promoted from the clean PLATINUM_V2_FULL_AUTONOMOUS_PASS baseline.
-navigation.py SHA256: AD2F522ED35EFE632C9E21222DF0EBD6C23578CAF014450458525ECFE94EF6DF
-sensordata.txt promoted from latest V2 sensor-enabled run.
-sensordata.txt SHA256: 8B697D561EE362FDE3D3D62802FDB7595FF1817BA47E619D459A6A5BABC02F27
-Sensor schema unchanged: timestamp, frame, phase, x_m, y_m, yaw_rad, front_m, left_m, right_m, rear_m.
-Sensor rows: 499; terminal_stop rows: 1.
-MATLAB final validation: PASS; 179 FRONT, 455 LEFT, 448 RIGHT, 182 REAR valid readings.
-Python final validation: compile PASS; model interface PASS; project tests 9/9 PASS.
-mazemapping.m unchanged during final promotion.
-Fresh maze-map PNG preserved here as evidence only; it is NOT in the final submission folder.
+FINAL TECHNICAL PACKAGE VALIDATION - CURRENT ARCHIVE
+
+The repository copies of the seven technical deliverables were verified byte-for-byte against the frozen local project folder on 13 November 2026.
+
+Current seven-file SHA-256 values are recorded in FINAL_7_FILES_SHA256.csv.
+
+navigation.py includes the author's later human-readable comment wording. Comparison against the validated V2 source found no changes to movement constants, thresholds, navigation conditions or executable control statements; the observed structural difference was comment/docstring wording only. The current file compiles successfully.
+
+robotcontrol.py and navigation.py compile successfully with the project Python environment.
+
+The final sensor dataset contains 499 rows with one terminal_stop row and the approved 10-column schema.
+
+The final MATLAB mapping code had previously been validated against the promoted sensor dataset and produced the preserved maze reconstruction image.
+
+The frozen local project folder was not modified during GitHub archiving.
