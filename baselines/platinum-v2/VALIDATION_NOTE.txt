@@ -1,0 +1,8 @@
+﻿Validation after preservation:
+- Python compile: PASS
+- network.h5 load: PASS
+- Model input: (None, 2500)
+- Model output: (None, 3)
+- wheel command checks: PASS
+- Existing project suite: 9/9 PASS
+- Live V2 run: 488 pulses, clean full-maze traversal and autonomous terminal stop.

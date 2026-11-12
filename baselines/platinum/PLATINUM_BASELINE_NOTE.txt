@@ -1,0 +1,5 @@
+﻿PLATINUM TRAVERSAL BASELINE - preserved after Lenovo Test-2 on 2026-11-10.
+This exact simplified candidate autonomously traversed the full maze route through the fifth corridor on the local Lenovo, including the visually successful paired right-turn section that failed in Test-1.
+The run did not autonomously stop at the terminal wall: the internal right-turn event counter remained one event behind because the NN executed the second physical right turn naturally without the supervisor counting it. At the terminal wall the controller therefore misclassified the terminal cue as supervised Right Turn 4 and hit the committed-turn safety limit.
+This file is preserved as an immutable live-performance baseline. Do not overwrite it.
+The final submission navigation.py and all Golden/Diamond baselines remain separate and unchanged.

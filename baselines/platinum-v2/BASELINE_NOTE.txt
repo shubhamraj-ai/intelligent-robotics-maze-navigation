@@ -1,0 +1,6 @@
+﻿PLATINUM_V2_FULL_AUTONOMOUS_PASS - immutable baseline.
+Validated live on local Lenovo against the professor's original Maze.ttt.
+Observed: complete autonomous traversal, natural fourth right-turn recognition, full fifth corridor, clean terminal-wall stop, no traceback.
+PowerShell run: 488 movement pulses; 482 direct NN actions and 6 supervisor overrides (98.77% direct NN movement control).
+All applied LEFT movements were NN-predicted LEFT; supervisor generated zero LEFT commands.
+Do not overwrite this baseline.

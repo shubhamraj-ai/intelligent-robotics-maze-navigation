@@ -1,0 +1,4 @@
+final-deliverables/* -text
+scenes/* -text
+baselines/** -text
+evidence/** -text

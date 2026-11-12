@@ -1,0 +1,11 @@
+﻿cff-version: 1.2.0
+message: "If you use these technical artefacts or validation baselines, please cite this repository."
+title: "Intelligent Robotics Maze Navigation: technical artefacts and validation baselines"
+type: software
+authors:
+  - family-names: "Raj"
+    given-names: "Shubham"
+repository-code: "https://github.com/shubhamraj-ai/intelligent-robotics-maze-navigation"
+url: "https://github.com/shubhamraj-ai/intelligent-robotics-maze-navigation"
+version: "1.0.0"
+date-released: "2026-11-13"

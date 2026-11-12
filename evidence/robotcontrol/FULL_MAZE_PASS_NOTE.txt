@@ -1,0 +1,4 @@
+﻿FULL MAZE LIVE ACCEPTANCE PASS on Lenovo.
+External Python + ZMQ Remote API; motor/stepping 20 Hz; camera preview 5 Hz; save interval 2 s; stable-key threshold 0.75 s; no Lua.
+User manually completed the full maze smoothly, OpenCV preview remained available, CoppeliaSim remained stable, and Ctrl+C produced a clean Recording finished message.
+This snapshot preserves the exact successful candidate and only the session_20261110_134057 images.
